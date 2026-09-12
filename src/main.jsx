@@ -1,40 +1,72 @@
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { api } from './api.js'
+import OwnerApp from './OwnerApp.jsx'
+import DispatcherApp from './DispatcherApp.jsx'
+import EngineerApp from './EngineerApp.jsx'
 import './style.css'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const today = () => new Date().toISOString().slice(0, 10)
-async function api(path, options = {}) { const r = await fetch(`${API}${path}`, { credentials: 'include', headers: { 'Content-Type': 'application/json' }, ...options }); const b = await r.json().catch(() => ({})); if (!r.ok) throw new Error(b.message || `Ошибка ${r.status}`); return b }
-function Field({ label, ...props }) {
-  const [options, setOptions] = useState([])
-  const isAddress = label === 'Адрес' || label === 'Стартовый адрес'
-  useEffect(() => { if (!isAddress || !props.value || props.value.length < 3) { setOptions([]); return } const timer = setTimeout(() => api(`/api/geocoding/search?q=${encodeURIComponent(props.value)}`).then(setOptions).catch(() => setOptions([])), 350); return () => clearTimeout(timer) }, [isAddress, props.value])
-  return <label className={isAddress ? 'address-field' : ''}>{label}<input {...props} />{isAddress && options.length > 0 && <div className="address-options">{options.map(x => <button type="button" key={`${x.latitude}-${x.longitude}`} onClick={() => { setOptions([]); props.onChange({ target: { value: x.display_name } }) }}><span>{x.display_name}</span><small>{x.latitude.toFixed(5)}, {x.longitude.toFixed(5)}</small></button>)}</div>}</label>
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(error) { return { error } }
+  componentDidCatch(error, info) { console.error('Route app render error', error, info) }
+  render() {
+    if (!this.state.error) return this.props.children
+    return <main className="crash-page"><section><span className="brand-mark">!</span><span className="eyebrow">Ошибка интерфейса</span><h1>Раздел не удалось открыть</h1><p>{this.state.error.message || 'Получены данные неожиданного формата.'}</p><button className="primary" onClick={() => window.location.reload()}>Перезагрузить приложение</button></section></main>
+  }
 }
 
-function LoginPanel({ onLogged, onProject, onError }) {
-  const [login, setLogin] = useState({ username: '', raw_password: '' })
-  const [projectName, setProjectName] = useState('')
+function Login({ onLogin }) {
+  const [form, setForm] = useState({ login: '', password: '' })
   const [busy, setBusy] = useState(false)
-  const submit = async e => { e.preventDefault(); setBusy(true); try { await api('/auth/login', { method: 'POST', body: JSON.stringify(login) }); onLogged() } catch (error) { onError(error.message) } finally { setBusy(false) } }
-  const createProject = async e => { e.preventDefault(); try { const created = await api('/api/projects/', { method: 'POST', body: JSON.stringify({ name: projectName, planning_timezone: 'Asia/Yekaterinburg' }) }); setProjectName(''); onProject(created.id); onError(`Проект «${created.name}» создан`) } catch (error) { onError(error.message) } }
-  return <><form className="sidebar-login" onSubmit={submit}><b>Вход в аккаунт</b><input required name="username" placeholder="Логин" value={login.username} onChange={e => setLogin({ ...login, username: e.target.value })} /><input required type="password" name="raw_password" placeholder="Пароль" value={login.raw_password} onChange={e => setLogin({ ...login, raw_password: e.target.value })} /><button disabled={busy}>{busy ? 'Входим…' : 'Войти'}</button></form><form className="sidebar-login project-create" onSubmit={createProject}><b>Новый проект</b><input required placeholder="Название" value={projectName} onChange={e => setProjectName(e.target.value)} /><button>Создать проект</button></form></>
+  const [error, setError] = useState('')
+  async function submit(event) {
+    event.preventDefault(); setBusy(true); setError('')
+    try {
+      await api('/api/auth/login', { method: 'POST', body: JSON.stringify(form) })
+      onLogin(await api('/api/auth/me'))
+    } catch (requestError) { setError(requestError.message || 'Не удалось войти') }
+    finally { setBusy(false) }
+  }
+  return <main className="login-page">
+    <section className="login-promo">
+      <div className="login-brand"><span className="brand-mark">↗</span><span>Маршрут<small>выездной сервис</small></span></div>
+      <div className="login-copy"><span className="eyebrow light">Умное планирование</span><h1>Рабочий день<br />без лишних километров</h1><p>Заявки, инженеры и оптимальные маршруты — в одном пространстве.</p></div>
+      <div className="login-orbit"><i /><i /><i /></div>
+    </section>
+    <section className="login-panel"><form className="login-card" onSubmit={submit}>
+      <div className="mobile-brand"><span className="brand-mark">↗</span> Маршрут</div>
+      <span className="eyebrow">Добро пожаловать</span><h2>Вход в систему</h2><p>Используйте учётную запись владельца, диспетчера или инженера.</p>
+      <label>Логин<input autoFocus autoComplete="username" required value={form.login} onChange={(event) => setForm({ ...form, login: event.target.value })} placeholder="Введите логин" /></label>
+      <label>Пароль<input type="password" autoComplete="current-password" required value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Введите пароль" /></label>
+      {error && <div className="form-error">{error}</div>}
+      <button className="primary wide" disabled={busy}>{busy ? 'Входим…' : 'Войти'}</button>
+    </form></section>
+  </main>
 }
 
 function App() {
-  const [tab, setTab] = useState('jobs'), [project, setProject] = useState('1'), [date, setDate] = useState(today()), [jobs, setJobs] = useState([]), [engineers, setEngineers] = useState([]), [message, setMessage] = useState(''), [result, setResult] = useState(null)
-  const [job, setJob] = useState({ external_id: '', address: '', sla_date: today(), work_type_id: '', service_duration_min: '', latitude: '', longitude: '' })
-  const [eng, setEng] = useState({ name: '', transport_type: 'NONE', start_address: '', start_latitude: '', start_longitude: '', shift_start: '08:00', shift_end: '19:00' })
-  const [kind, setKind] = useState('work-types'), [entry, setEntry] = useState({ code: '', name: '', default_service_duration_min: '45', required_transport: 'NONE' }), [bulk, setBulk] = useState('')
-  const load = async () => { try { const [j, e] = await Promise.all([api(`/api/projects/${project}/jobs`), api(`/api/projects/${project}/engineers`)]); setJobs(j); setEngineers(e) } catch (e) { setMessage(e.message) } }
-  useEffect(() => { load() }, [project])
-  useEffect(() => { const aside = document.querySelector('.scenario aside'); if (!aside) return; const host = document.createElement('div'); aside.append(host); const root = createRoot(host); root.render(<LoginPanel onLogged={() => { setMessage('Вход выполнен'); load() }} onProject={id => { setProject(String(id)); setMessage('Проект создан') }} onError={setMessage} />); return () => { root.unmount(); host.remove() } }, [])
-  const submitJob = async e => { e.preventDefault(); try { const p = { ...job, work_type_id: Number(job.work_type_id), service_duration_min: job.service_duration_min ? Number(job.service_duration_min) : null, latitude: job.latitude ? Number(job.latitude) : null, longitude: job.longitude ? Number(job.longitude) : null }; await api(`/api/projects/${project}/jobs`, { method: 'POST', body: JSON.stringify(p) }); setMessage('Заявка создана'); load() } catch (e) { setMessage(e.message) } }
-  const submitEngineer = async e => { e.preventDefault(); try { const p = { ...eng, active: true, start_latitude: eng.start_latitude ? Number(eng.start_latitude) : null, start_longitude: eng.start_longitude ? Number(eng.start_longitude) : null }; delete p.shift_start; delete p.shift_end; const created = await api(`/api/projects/${project}/engineers`, { method: 'POST', body: JSON.stringify(p) }); await api(`/api/projects/${project}/engineers/${created.id}/schedules`, { method: 'POST', body: JSON.stringify({ work_date: date, shift_start: `${eng.shift_start}:00`, shift_end: `${eng.shift_end}:00` }) }); setMessage('Инженер и смена созданы'); load() } catch (e) { setMessage(e.message) } }
-  const submitCatalog = async e => { e.preventDefault(); try { const p = { code: entry.code, name: entry.name }; if (kind === 'work-types') Object.assign(p, { default_service_duration_min: Number(entry.default_service_duration_min), required_transport: entry.required_transport }); await api(`/api/projects/${project}/${kind}`, { method: 'POST', body: JSON.stringify(p) }); setMessage('Справочник обновлён') } catch (e) { setMessage(e.message) } }
-  const importJobs = async () => { try { const data = JSON.parse(bulk); await api(`/api/projects/${project}/jobs/bulk`, { method: 'POST', body: JSON.stringify({ jobs: Array.isArray(data) ? data : data.jobs }) }); setMessage('Заявки импортированы'); load() } catch (e) { setMessage(e.message) } }
-  const plan = async () => { try { const start = await api(`/api/projects/${project}/planning/runs`, { method: 'POST', body: JSON.stringify({ planning_date: date, timezone: 'Asia/Yekaterinburg' }) }); setResult(await api(`/api/projects/${project}/planning/runs/${start.planning_run_id}`)); setMessage('Расчёт завершён') } catch (e) { setMessage(e.message) } }
-  return <main className="scenario"><aside><div className="brand">SHIP-IT<small>планирование выездов</small></div>{[['jobs','Заявки'],['engineers','Инженеры'],['catalog','Справочники'],['import','Импорт JSON']].map(([id, title]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{title}</button>)}</aside><section className="workspace"><header><div><h1>{({ jobs: 'Заявки', engineers: 'Инженеры', catalog: 'Справочники', import: 'Импорт' })[tab]}</h1><p>Настройка сценария без seed</p></div><div className="planner"><Field label="Проект" type="number" value={project} onChange={e => setProject(e.target.value)} /><Field label="Дата" type="date" value={date} onChange={e => setDate(e.target.value)} /><button onClick={plan}>Рассчитать</button></div></header>{message && <div className="notice">{message}</div>}{tab === 'jobs' && <div className="layout"><form className="panel form" onSubmit={submitJob}><h2>Новая заявка</h2><Field label="Внешний ID" value={job.external_id} onChange={e => setJob({ ...job, external_id: e.target.value })} /><Field label="Адрес" required value={job.address} onChange={e => setJob({ ...job, address: e.target.value })} /><div className="two"><Field label="SLA" type="date" value={job.sla_date} onChange={e => setJob({ ...job, sla_date: e.target.value })} /><Field label="Тип работы ID" required type="number" value={job.work_type_id} onChange={e => setJob({ ...job, work_type_id: e.target.value })} /></div><div className="two"><Field label="Длительность" type="number" value={job.service_duration_min} onChange={e => setJob({ ...job, service_duration_min: e.target.value })} /><Field label="Широта" type="number" step="any" value={job.latitude} onChange={e => setJob({ ...job, latitude: e.target.value })} /></div><Field label="Долгота" type="number" step="any" value={job.longitude} onChange={e => setJob({ ...job, longitude: e.target.value })} /><button>Создать</button></form><List title="Все заявки" items={jobs} render={x => <><strong>#{x.id} {x.external_id || 'без ID'}</strong><span>{x.address}</span><small>SLA {x.sla_date} · тип {x.work_type_id}</small></>} /></div>}{tab === 'engineers' && <div className="layout"><form className="panel form" onSubmit={submitEngineer}><h2>Новый инженер</h2><Field label="Имя" required value={eng.name} onChange={e => setEng({ ...eng, name: e.target.value })} /><label>Транспорт<select value={eng.transport_type} onChange={e => setEng({ ...eng, transport_type: e.target.value })}><option value="NONE">Пешком</option><option value="CAR">Автомобиль</option></select></label><Field label="Стартовый адрес" value={eng.start_address} onChange={e => setEng({ ...eng, start_address: e.target.value })} /><div className="two"><Field label="Широта" value={eng.start_latitude} onChange={e => setEng({ ...eng, start_latitude: e.target.value })} /><Field label="Долгота" value={eng.start_longitude} onChange={e => setEng({ ...eng, start_longitude: e.target.value })} /></div><div className="two"><Field label="Смена с" type="time" value={eng.shift_start} onChange={e => setEng({ ...eng, shift_start: e.target.value })} /><Field label="до" type="time" value={eng.shift_end} onChange={e => setEng({ ...eng, shift_end: e.target.value })} /></div><button>Создать инженера</button></form><List title="Инженеры" items={engineers} render={x => <><strong>#{x.id} {x.name}</strong><span>{x.transport_type === 'CAR' ? 'Автомобиль' : 'Пешком'}</span><small>{x.start_address || `${x.start_latitude}, ${x.start_longitude}`}</small></>} /></div>}{tab === 'catalog' && <form className="panel form catalog" onSubmit={submitCatalog}><h2>Справочник</h2><label>Сущность<select value={kind} onChange={e => setKind(e.target.value)}><option value="work-types">Тип работы</option><option value="qualifications">Квалификация</option><option value="equipment-types">Оборудование</option></select></label><Field label="Код" required value={entry.code} onChange={e => setEntry({ ...entry, code: e.target.value })} /><Field label="Название" required value={entry.name} onChange={e => setEntry({ ...entry, name: e.target.value })} />{kind === 'work-types' && <div className="two"><Field label="Минут" type="number" value={entry.default_service_duration_min} onChange={e => setEntry({ ...entry, default_service_duration_min: e.target.value })} /><label>Транспорт<select value={entry.required_transport} onChange={e => setEntry({ ...entry, required_transport: e.target.value })}><option value="NONE">Не нужен</option><option value="CAR">Автомобиль</option></select></label></div>}<button>Сохранить</button></form>}{tab === 'import' && <div className="panel import"><h2>Загрузить заявки</h2><p>Массив JSON или объект с полем jobs.</p><textarea rows="18" value={bulk} onChange={e => setBulk(e.target.value)} placeholder={'[{"address":"улица Ленина, Пермь","sla_date":"2026-09-12","work_type_id":1}]'} /><button onClick={importJobs}>Импортировать</button></div>}{result && <div className="resultbar"><strong>Расчёт #{result.run.id}: {result.run.status}</strong><span>Назначено: {result.run.assigned_jobs_count}</span><span>Не назначено: {result.run.unassigned_jobs_count}</span><span>Objective: {result.run.objective}</span></div>}</section></main>
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    api('/api/auth/me').then(setUser).catch(() => setUser(null)).finally(() => setLoading(false))
+    const expire = () => setUser(null)
+    window.addEventListener('route-app:unauthorized', expire)
+    return () => window.removeEventListener('route-app:unauthorized', expire)
+  }, [])
+  async function logout() { try { await api('/api/auth/logout', { method: 'POST' }) } finally { setUser(null) } }
+  if (loading) return <div className="app-loader"><span className="brand-mark">↗</span><b>Маршрут</b><i /></div>
+  if (!user) return <Login onLogin={setUser} />
+  const role = String(user.role).toLowerCase()
+  if (role === 'owner' || role === 'admin') return <OwnerApp user={user} onLogout={logout} />
+  if (role === 'engineer') return <EngineerApp user={user} onLogout={logout} />
+  return <DispatcherApp user={user} onLogout={logout} />
 }
-function List({ title, items, render }) { return <div className="panel table"><h2>{title} <b>{items.length}</b></h2>{items.length ? items.map(x => <article key={x.id}>{render(x)}</article>) : <p className="muted">Пока пусто</p>}</div> }
-createRoot(document.getElementById('root')).render(<App />)
+
+const container = document.getElementById('root')
+const root = container.__routeAppRoot || createRoot(container)
+container.__routeAppRoot = root
+root.render(<AppErrorBoundary><App /></AppErrorBoundary>)
