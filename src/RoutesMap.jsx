@@ -41,9 +41,14 @@ export default function RoutesMap({ result }) {
   const [lines, setLines] = useState({})
   const { routes, jobs, engineers } = useMemo(() => {
     const snapshot = result?.run?.input_snapshot || {}
+    const routes = asArray(result?.routes)
     const jobMap = Object.fromEntries(asArray(snapshot.jobs).filter((item) => item?.id != null).map((item) => [item.id, item.coordinate]))
     const engineerMap = Object.fromEntries(asArray(snapshot.engineers).filter((item) => item?.id != null).map((item) => [item.id, item]))
-    return { routes: asArray(result?.routes), jobs: jobMap, engineers: engineerMap }
+    routes.forEach((route) => {
+      if (!engineerMap[route.engineer_id] && route.start_coordinate) engineerMap[route.engineer_id] = { coordinate: route.start_coordinate, transport_type: route.transport_type }
+      asArray(route.jobs).forEach((job) => { if (!jobMap[job.job_id] && job.coordinate) jobMap[job.job_id] = job.coordinate })
+    })
+    return { routes, jobs: jobMap, engineers: engineerMap }
   }, [result])
 
   const locationsFor = (route) => [engineers[route.engineer_id]?.coordinate, ...asArray(route.jobs).map((job) => jobs[job.job_id])].filter(validCoordinate)
@@ -76,6 +81,6 @@ export default function RoutesMap({ result }) {
     const markers = locationsFor(route)
     const line = asArray(lines[route.engineer_id]).length ? lines[route.engineer_id] : markers.map(point)
     const color = ['#2563eb', '#dc2626', '#16a34a', '#9333ea'][index % 4]
-    return <React.Fragment key={route.engineer_id}><Polyline positions={line} pathOptions={{ color, weight: 5 }} />{validCoordinate(engineer?.coordinate) && <Marker position={point(engineer.coordinate)}><Popup>Инженер #{route.engineer_id} · {engineer.transport_type === 'CAR' ? 'автомобиль' : 'пешком'}</Popup></Marker>}{asArray(route.jobs).map((job) => validCoordinate(jobs[job.job_id]) && <Marker key={job.job_id} position={point(jobs[job.job_id])}><Popup>Заявка #{job.job_id}<br />{job.planned_start ? new Date(job.planned_start).toLocaleTimeString('ru-RU') : 'Время не указано'}</Popup></Marker>)}</React.Fragment>
+    return <React.Fragment key={route.engineer_id}><Polyline positions={line} pathOptions={{ color, weight: 5 }} />{validCoordinate(engineer?.coordinate) && <Marker position={point(engineer.coordinate)}><Popup>{route.engineer_name || 'Инженер'} · {engineer.transport_type === 'CAR' ? 'автомобиль' : 'пешком'}</Popup></Marker>}{asArray(route.jobs).map((job) => validCoordinate(jobs[job.job_id]) && <Marker key={job.job_id} position={point(jobs[job.job_id])}><Popup>{job.address || 'Заявка'}<br />{job.planned_start ? new Date(job.planned_start).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'Время не указано'}</Popup></Marker>)}</React.Fragment>
   })}</MapContainer></section>
 }
