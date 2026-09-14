@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, qs } from './api.js'
 import { Badge, Button, Empty, Field, Icon, Modal, PageHeader, Shell, StatCard, Toast, formatDate } from './ui.jsx'
+import { PlanningPage } from './DispatcherApp.jsx'
 
 const nav = [
   { id: 'projects', label: 'Проекты', icon: 'projects' },
   { id: 'owners', label: 'Владельцы', icon: 'owners' },
+  { id: 'planning', label: 'Планирование', icon: 'planning' },
 ]
 
 function UserActions({ item, onChanged, notify }) {
@@ -71,8 +73,21 @@ function Owners({ notify }) {
   return <><PageHeader eyebrow="Управление доступом" title="Владельцы" subtitle="Пользователи с доступом ко всем проектам и настройкам." /><div className="content-split"><div className="table-card"><table><thead><tr><th>Пользователь</th><th>Статус</th><th /></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="entity-cell"><span className="avatar soft">{String(item.login || '?')[0].toUpperCase()}</span><span><b>{item.login || 'Без логина'}</b><small>Владелец</small></span></div></td><td><Badge status={item.status}>{item.status === 'ACTIVE' ? 'Активен' : 'Заблокирован'}</Badge></td><td><UserActions item={item} onChanged={load} notify={notify} /></td></tr>)}</tbody></table></div><form className="side-form sticky" onSubmit={create}><span className="form-symbol">+</span><h3>Новый владелец</h3><p>Полный доступ к администрированию.</p><Field label="Логин" required value={form.login} onChange={(event) => setForm({ ...form, login: event.target.value })} /><Field label="Пароль" required type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /><Button className="wide" disabled={busy}>{busy ? 'Создаём…' : 'Добавить'}</Button></form></div></>
 }
 
+function OwnerPlanning({ notify }) {
+  const [projects, setProjects] = useState([])
+  const [projectId, setProjectId] = useState('')
+  useEffect(() => {
+    api('/api/admin/projects?status=ACTIVE').then((items) => {
+      const values = Array.isArray(items) ? items : []
+      setProjects(values)
+      setProjectId((current) => current || String(values[0]?.id || ''))
+    }).catch((error) => notify(error.message, 'error'))
+  }, [])
+  return <><div className="owner-project-switch"><Field label="Проект для планирования"><select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Выберите проект</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name} · {project.planning_timezone}</option>)}</select></Field></div>{projectId ? <PlanningPage key={projectId} projectId={Number(projectId)} notify={notify} ownerMode /> : <Empty title="Нет активного проекта" text="Создайте или включите проект, чтобы запустить планирование." />}</>
+}
+
 export default function OwnerApp({ user, onLogout }) {
   const [section, setSection] = useState('projects'), [toast, setToast] = useState(null)
   const notify = (message, type = 'info') => setToast({ message, type, key: Date.now() })
-  return <Shell user={user} roleLabel="Владелец" contextLabel="Управление продуктом" contextValue="Все проекты" nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'projects' ? <Projects notify={notify} /> : <Owners notify={notify} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
+  return <Shell user={user} roleLabel="Владелец" contextLabel="Управление продуктом" contextValue="Все проекты" nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'projects' && <Projects notify={notify} />}{section === 'owners' && <Owners notify={notify} />}{section === 'planning' && <OwnerPlanning notify={notify} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
 }
