@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
 import { Badge, Button, Empty, Icon, Modal, PageHeader, Shell, Toast, formatDate, formatDateTime, formatTime } from './ui.jsx'
 
@@ -8,6 +8,27 @@ const nav = [
   { id: 'history', label: 'История', icon: 'history' },
 ]
 const labels = { NEW: 'Новая', IN_PROGRESS: 'В работе', COMPLETED: 'Выполнена', CANCELLED: 'Отменена' }
+const changeLabels = { ADDED: 'Добавлена', REMOVED: 'Снята с маршрута', CHANGED: 'Изменена' }
+
+function assignmentSummary(value) {
+  if (!value) return 'нет в маршруте'
+  return `${formatDate(value.planning_date)}, №${value.sequence}, ${formatTime(value.planned_start)}–${formatTime(value.planned_finish)}`
+}
+
+function changedFields(before, after) {
+  if (!before || !after) return []
+  return [
+    ['planning_date', 'Дата', formatDate],
+    ['sequence', 'Порядок', (value) => `№${value}`],
+    ['planned_start', 'Начало', formatTime],
+    ['planned_finish', 'Окончание', formatTime],
+  ].filter(([key]) => before[key] !== after[key]).map(([key, label, format]) => `${label}: ${format(before[key])} → ${format(after[key])}`)
+}
+
+function RouteChanges({ version, changes }) {
+  if (!changes.length) return null
+  return <section className="engineer-route-changes"><header><div><small>Обновление маршрута</small><h2>Что изменилось в версии {version}</h2></div><Badge status="PUBLISHED">Опубликовано</Badge></header><div>{changes.map((item) => { const fields = changedFields(item.old_assignment, item.new_assignment); return <article key={item.id} className={`route-change-${String(item.change_type).toLowerCase()}`}><div><b>Заявка #{item.job_id} · {item.work_type_name}</b><small>{item.address}</small></div><strong>{changeLabels[item.change_type] || item.change_type}</strong>{item.change_type === 'ADDED' && <p>{assignmentSummary(item.new_assignment)}</p>}{item.change_type === 'REMOVED' && <p>{assignmentSummary(item.old_assignment)}</p>}{item.change_type === 'CHANGED' && <ul>{fields.map((field) => <li key={field}>{field}</li>)}</ul>}</article> })}</div></section>
+}
 
 function Assignment({ item, onOpen }) {
   return <button className="assignment-card" onClick={() => onOpen(item)}><div className="assignment-sequence">{item.sequence}</div><div className="assignment-main"><header><b>{item.work_type_name}</b><Badge status={item.job_status}>{labels[item.job_status]}</Badge></header><p><Icon name="map" />{item.address}</p><footer><span>{formatTime(item.planned_start)}–{formatTime(item.planned_finish)}</span><span>{item.service_duration_min} мин</span><span>{formatDate(item.planning_date)}</span></footer></div><Icon name="chevron" /></button>
@@ -22,11 +43,35 @@ function AssignmentDetails({ item, onClose, onChanged, notify }) {
 }
 
 export default function EngineerApp({ user, onLogout }) {
-  const [scope, setScope] = useState('today'), [items, setItems] = useState([]), [selected, setSelected] = useState(null), [loading, setLoading] = useState(true), [toast, setToast] = useState(null)
+  const [scope, setScope] = useState('today'), [items, setItems] = useState([]), [changes, setChanges] = useState([]), [selected, setSelected] = useState(null), [loading, setLoading] = useState(true), [toast, setToast] = useState(null), [planVersion, setPlanVersion] = useState(null)
+  const previousVersion = useRef(null)
   const notify = (message, type = 'info') => setToast({ message, type, key: Date.now() })
-  const load = () => { setLoading(true); api(`/api/engineer/assignments?scope=${scope}`).then((value) => setItems(Array.isArray(value) ? value : [])).catch((error) => notify(error.message, 'error')).finally(() => setLoading(false)) }
-  useEffect(() => { load() }, [scope])
+  const load = (quiet = false) => {
+    if (!quiet) setLoading(true)
+    api(`/api/engineer/assignments/route-state?scope=${scope}`).then((value) => {
+      const nextItems = Array.isArray(value?.assignments) ? value.assignments : []
+      const nextChanges = Array.isArray(value?.changes) ? value.changes : []
+      const nextVersion = value?.plan_version != null && Number.isFinite(Number(value.plan_version)) ? Number(value.plan_version) : null
+      if (nextVersion !== null && previousVersion.current !== null && nextVersion !== previousVersion.current) notify(`Опубликована новая версия плана #${nextVersion}. Маршрут обновлён.`)
+      if (nextVersion !== null) previousVersion.current = nextVersion
+      setPlanVersion(nextVersion); setItems(nextItems); setChanges(nextChanges)
+    }).catch((error) => { if (!quiet) notify(error.message, 'error') }).finally(() => { if (!quiet) setLoading(false) })
+  }
+  useEffect(() => {
+    load()
+    const timer = window.setInterval(() => load(true), 15000)
+    return () => window.clearInterval(timer)
+  }, [scope])
   const title = scope === 'today' ? 'Заявки на сегодня' : scope === 'future' ? 'Будущие заявки' : 'История работ'
   const subtitle = scope === 'today' ? 'Выполняйте работы в указанной последовательности.' : scope === 'future' ? 'Опубликованные назначения на следующие дни.' : 'Завершённые и отменённые работы.'
-  return <Shell user={user} roleLabel="Инженер" contextLabel="Личный кабинет" contextValue={`Инженер #${user.engineer_id}`} nav={nav} active={scope} onNavigate={setScope} onLogout={onLogout}><div className="page-wrap engineer-page"><PageHeader eyebrow="Мой маршрут" title={title} subtitle={subtitle} actions={<Button kind="secondary" icon="refresh" onClick={load}>Обновить</Button>} />{scope === 'today' && items.length > 0 && <div className="day-summary"><div><small>Заявок</small><b>{items.length}</b></div><div><small>Первая работа</small><b>{formatTime(items[0].planned_start)}</b></div><div><small>Завершение</small><b>{formatTime(items[items.length - 1].planned_finish)}</b></div></div>}<section className="assignments">{loading ? <div className="skeleton-list"><i /><i /><i /></div> : items.length ? items.map((item) => <Assignment key={item.id} item={item} onOpen={setSelected} />) : <Empty title="Назначений нет" text={scope === 'today' ? 'Диспетчер ещё не опубликовал план или на сегодня нет работ.' : 'В этом разделе пока пусто.'} />}</section>{selected && <AssignmentDetails item={selected} onClose={() => setSelected(null)} onChanged={load} notify={notify} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
+  return <Shell user={user} roleLabel="Инженер" contextLabel="Личный кабинет" contextValue={`Инженер #${user.engineer_id}`} nav={nav} active={scope} onNavigate={setScope} onLogout={onLogout}>
+    <div className="page-wrap engineer-page">
+      <PageHeader eyebrow="Мой маршрут" title={title} subtitle={subtitle} actions={<>{planVersion !== null && <span className="plan-version-chip">Версия плана {planVersion}</span>}<Button kind="secondary" icon="refresh" onClick={() => load()}>Обновить</Button></>} />
+      <RouteChanges version={planVersion} changes={changes} />
+      {scope === 'today' && items.length > 0 && <div className="day-summary"><div><small>Заявок</small><b>{items.length}</b></div><div><small>Первая работа</small><b>{formatTime(items[0].planned_start)}</b></div><div><small>Завершение</small><b>{formatTime(items[items.length - 1].planned_finish)}</b></div></div>}
+      <section className="assignments">{loading ? <div className="skeleton-list"><i /><i /><i /></div> : items.length ? items.map((item) => <Assignment key={item.id} item={item} onOpen={setSelected} />) : <Empty title="Назначений нет" text={scope === 'today' ? 'В актуальной версии плана на сегодня работ нет.' : 'В этом разделе пока пусто.'} />}</section>
+      {selected && <AssignmentDetails item={selected} onClose={() => setSelected(null)} onChanged={() => load()} notify={notify} />}
+    </div>
+    <Toast toast={toast} onClose={() => setToast(null)} />
+  </Shell>
 }
