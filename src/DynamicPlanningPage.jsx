@@ -5,10 +5,13 @@ import { Badge, Button, Empty, Field, Modal, PageHeader, formatDate, formatDateT
 
 const activeEventStates = new Set(['PENDING', 'RUNNING'])
 const eventStateLabels = { PENDING: 'Ожидает', RUNNING: 'Выполняется', PUBLISHED: 'Опубликован', FAILED: 'Ошибка' }
-const triggerLabels = { JOB_CREATED: 'Новая заявка', MANUAL: 'Ручной запуск', NIGHTLY: 'Ночной запуск', RECOVERY: 'Восстановление' }
-const changeLabels = { ASSIGNED: 'Назначена', CHANGED: 'Перепланирована', DISPLACED: 'Вытеснена' }
-const changeReasonLabels = { NEW_ASSIGNMENT: 'Новое назначение', REPLANNED: 'Маршрут изменён', DISPLACED_TO_FUTURE: 'Перенесена на будущую дату', NOT_ASSIGNED_IN_NEW_HORIZON: 'Не назначена в новой версии' }
+const triggerLabels = { JOB_CREATED: 'Новая заявка', JOB_CANCELLED: 'Отмена заявки', ENGINEER_AVAILABILITY_LOST: 'Инженер недоступен', ENGINEER_AVAILABILITY_RESTORED: 'Доступность инженера восстановлена', COALESCED: 'Несколько изменений', MANUAL: 'Ручной запуск', NIGHTLY: 'Ночной запуск', RECOVERY: 'Восстановление' }
+const changeLabels = { ASSIGNED: 'Назначена', CHANGED: 'Перепланирована', DISPLACED: 'Вытеснена', CANCELLED: 'Отменена' }
+const changeReasonLabels = { NEW_ASSIGNMENT: 'Новое назначение', REPLANNED: 'Маршрут изменён', JOB_CANCELLED: 'Заявка отменена', ENGINEER_UNAVAILABLE: 'Инженер недоступен', CANCELLED_EN_ROUTE_ASSUMPTION: 'Маршрут продолжен от адреса отменённой заявки', DISPLACED_TO_FUTURE: 'Перенесена на будущую дату', NOT_ASSIGNED_IN_NEW_HORIZON: 'Не назначена в новой версии' }
 const reasonLabels = {
+  NO_AVAILABLE_ENGINEER: 'На дату нет доступного инженера',
+  NO_COMPATIBLE_ENGINEER: 'Нет совместимого инженера',
+  NOT_SELECTED_BY_OPTIMIZER: 'Допустима, но не выбрана оптимизатором',
   NO_COMPATIBLE_ENGINEER_IN_HORIZON: 'Нет совместимого инженера в горизонте',
   NO_SHIFT_IN_HORIZON: 'Нет смен в горизонте',
   DURATION_EXCEEDS_ALL_SHIFTS: 'Работа не помещается ни в одну смену',
@@ -17,7 +20,16 @@ const reasonLabels = {
   DAILY_TIME_WINDOW_CONFLICT: 'Временное окно не помещается в смену',
   NOT_ASSIGNED_WITHIN_HORIZON: 'Не назначена в пределах горизонта',
   SLA_OUTSIDE_MAXIMUM_HORIZON: 'SLA находится за пределами максимального горизонта',
+  ENGINEER_UNAVAILABLE: 'Инженер недоступен',
+  JOB_CANCELLED: 'Заявка отменена',
+  DISTANCE_DATA_NOT_READY: 'Данные о расстояниях не готовы',
+  TRAVEL_PROVIDER_UNAVAILABLE: 'Дорожный сервис недоступен',
+  INVALID_PENALTY_BANDS: 'Некорректны диапазоны приоритетов SLA',
+  OBJECTIVE_RANGE_OVERFLOW: 'Целевая функция не помещается в допустимый диапазон',
+  FAILED_VALIDATION: 'Результат не прошёл проверку ограничений',
+  STALE_SNAPSHOT: 'Исходные данные изменились во время расчёта',
 }
+const eventErrorText = (event) => reasonLabels[event?.error_code] || event?.error_message || event?.error_code || 'Неизвестная ошибка'
 const planningImpactText = 'Изменение параметров не перестраивает уже опубликованный план. Новые настройки применятся при следующем ручном, ночном или автоматическом расчёте.'
 const safeArray = (value) => Array.isArray(value) ? value : []
 
@@ -49,7 +61,7 @@ function PlanningConfig({ notify }) {
     {open && <Modal wide title="Параметры динамического планирования" subtitle={`Версия конфигурации ${config.version}`} onClose={() => setOpen(false)}>
       <form className="stack-form" onSubmit={save}>
         <div className="planning-impact-warning">{planningImpactText}</div>
-        <div className="form-grid">{numericFields.map(([name, label, min]) => <Field label={label} key={name}><input required name={name} type="number" min={min} defaultValue={config[name]} /></Field>)}</div>
+        <div className="form-grid">{numericFields.map(([name, label, min, fallback]) => <Field label={label} key={name}><input required name={name} type="number" min={min} defaultValue={config[name] ?? fallback} /></Field>)}</div>
         <Field label="Провайдер дорожной матрицы"><select name="travel_provider" defaultValue={config.travel_provider}><option value="VALHALLA_LOCAL">Локальная Valhalla</option></select></Field>
         <label className="switch-row"><span><b>Ночной пересчёт</b><small>Полностью перестраивает и автоматически публикует план один раз в сутки.</small></span><input name="nightly_planning_enabled" type="checkbox" defaultChecked={config.nightly_planning_enabled} /></label>
         <Field label="Время ночного пересчёта"><input required name="nightly_planning_time" type="time" defaultValue={formatTime(config.nightly_planning_time)} /></Field>
@@ -70,6 +82,9 @@ const numericFields = [
   ['batch_total_time_limit_sec', 'Общий лимит каскада, сек', 1],
   ['max_jobs_per_run', 'Заявок в дневном расчёте', 1],
   ['max_jobs_per_batch', 'Заявок в событии', 1],
+  ['distance_unit_meters', 'Единица пробега, метры', 1],
+  ['time_unit_seconds', 'Единица времени пути, секунды', 1],
+  ['travel_cache_ttl_days', 'TTL дорожной матрицы, дней', 0, 7],
   ['future_opportunity_critical', 'Бонус: одна возможность', 0],
   ['future_opportunity_high', 'Бонус: 2–3 возможности', 0],
   ['future_opportunity_limited', 'Бонус: 4–7 возможностей', 0],
@@ -100,7 +115,7 @@ function EventProgress({ event }) {
     <div className="planning-event-head"><div><span className="eyebrow">Событие планирования #{event.id}</span><h3>{triggerLabels[event.event_type] || event.event_type}</h3></div><Badge status={event.state}>{eventStateLabels[event.state] || event.state}</Badge></div>
     <div className="progress-track"><i style={{ width: `${percent}%` }} /></div>
     <div className="planning-event-meta"><span>Кандидаты: {completed}/{total || '—'}</span><span>Ожидают обработки: {progress.queued_events ?? 0}</span>{progress.current_candidate_engineer_id && <span>Инженер-кандидат #{progress.current_candidate_engineer_id}</span>}{progress.current_day?.planning_date && <span>Дата: {formatDate(progress.current_day.planning_date)}</span>}</div>
-    {event.error_message && <div className="stale-warning">{event.error_message}</div>}
+    {(event.error_message || event.error_code) && <div className="stale-warning">{eventErrorText(event)}</div>}
   </section>
 }
 
@@ -149,8 +164,8 @@ function VersionDay({ date, engineers, projectToday }) {
   return <section className="version-day">
     <h3>{formatDate(date)}{date === projectToday && <small>Сегодня</small>}</h3>
     <div className="routes-summary">{[...engineers.entries()].map(([engineerId, assignments]) => <article key={engineerId}>
-      <header><b>{assignments[0]?.engineer_name || `Инженер #${engineerId}`}</b><span>{assignments.length} заявок</span></header>
-      {assignments.map((item) => <div key={item.id}><span className="sequence">{item.sequence}</span><b>#{item.job_id} · {item.address}</b><small>{formatTime(item.planned_start)}–{formatTime(item.planned_finish)}</small></div>)}
+      <header><b>{assignments[0]?.engineer_name || `Инженер #${engineerId}`}</b><span>{assignments.length} заявок · {(assignments.reduce((sum, item) => sum + Number(item.distance_from_previous_meters || 0), 0) / 1000).toFixed(1)} км</span></header>
+      {assignments.map((item) => <div key={item.id}><span className="sequence">{item.sequence}</span><b>#{item.job_id} · {item.address}{item.priority_type === 'EMERGENCY' ? ' · Аварийная' : ''}</b><small>{formatTime(item.planned_start)}–{formatTime(item.planned_finish)}</small></div>)}
     </article>)}</div>
     <RoutesMap result={mapResult} />
   </section>
@@ -215,7 +230,7 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
       if (value && !activeEventStates.has(value.state)) {
         window.clearInterval(timer); void loadVersions(true); setSelectedVersionId(null)
         const current = await api(`${base}/current`); setPlan(current || { version: null, assignments: [], changes: [] })
-        notify(value.state === 'PUBLISHED' ? `Опубликована новая версия плана #${current?.version?.version_number || ''}` : `Планирование завершилось ошибкой: ${value.error_message || value.error_code || 'неизвестная ошибка'}`, value.state === 'FAILED' ? 'error' : 'info')
+        notify(value.state === 'PUBLISHED' ? `Опубликована новая версия плана #${current?.version?.version_number || ''}` : `Планирование завершилось ошибкой: ${eventErrorText(value)}`, value.state === 'FAILED' ? 'error' : 'info')
       }
     }, 2000)
     return () => window.clearInterval(timer)
@@ -243,6 +258,7 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
   }, [plan.assignments])
   const unassigned = safeArray(plan.version?.unassigned_jobs)
   const metrics = plan.version?.metrics || {}
+  const routeMetrics = plan.route_metrics || {}
   const currentVersionId = versions.find((item) => item.is_current)?.id
 
   return <>
@@ -250,6 +266,6 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
     <section className="cascade-intro"><div><small>Текущая дата проекта</small><b>{formatDate(projectToday)}</b><span>Определяется часовым поясом проекта.</span></div><div><small>Публикация</small><b>Весь горизонт одной версией</b><span>Ручного подтверждения отдельных дней больше нет.</span></div><div><small>Актуальная версия</small><b>{plan.version ? `Версия ${plan.version.version_number}` : 'Ещё не опубликована'}</b><span>{plan.version ? formatDateTime(plan.version.published_at) : 'Запустите первый расчёт.'}</span></div><div className={`readiness ${readiness?.ready ? 'ready' : 'not-ready'}`}><span>{readiness?.ready ? '✓' : '!'}</span><div><b>{readiness?.ready ? 'Данные готовы' : 'Нужно подготовить данные'}</b>{readiness?.problems?.map((item) => <small key={item.code}>{item.message}</small>)}</div></div></section>
     <EventProgress event={event} />
     <div className="planning-grid cascade-grid"><section className="table-card run-list"><header><h2>Версии плана</h2><span>{versions.length}</span></header>{versions.length ? <><button className={selectedVersionId === null ? 'active' : ''} onClick={openCurrent}><span><b>Текущая версия</b><small>Автоматически обновляется</small></span>{plan.version && selectedVersionId === null && <Badge status="PUBLISHED">#{plan.version.version_number}</Badge>}</button>{versions.map((item) => <button key={item.id} className={selectedVersionId === item.id ? 'active' : ''} onClick={() => openVersion(item.id)}><span><b>Версия {item.version_number}</b><small>{formatDateTime(item.published_at)}</small></span><span><Badge status={item.is_current ? 'PUBLISHED' : 'SUPERSEDED'}>{item.is_current ? 'Текущая' : 'Архив'}</Badge><small>{triggerLabels[item.trigger_source] || item.trigger_source}</small></span></button>)}</> : <Empty title="Версий пока нет" text="Запустите первый расчёт или создайте новую заявку." />}</section>
-      <section className="cascade-result">{plan.version ? <><div className="result-head"><div><span className="eyebrow">{plan.version.id === currentVersionId ? 'Опубликованный план' : 'Архивная версия'}</span><h2>Версия {plan.version.version_number}</h2><p>{triggerLabels[plan.version.trigger_source] || plan.version.trigger_source} · {formatDateTime(plan.version.published_at)}</p></div><Badge status={plan.version.is_current ? 'PUBLISHED' : 'SUPERSEDED'}>{plan.version.is_current ? 'Текущая' : 'Архив'}</Badge></div><div className="mini-stats"><div><small>Назначено</small><b>{safeArray(plan.assignments).length}</b></div><div><small>Не назначено</small><b>{unassigned.length}</b></div><div><small>Изменений</small><b>{safeArray(plan.changes).length}</b></div><div><small>Обработано дней</small><b>{metrics.processed_days ?? '—'}</b></div></div><div className="cascade-tabs"><button className={view === 'routes' ? 'active' : ''} onClick={() => setView('routes')}>Маршруты и карта</button><button className={view === 'changes' ? 'active' : ''} onClick={() => setView('changes')}>Изменения</button><button className={view === 'unassigned' ? 'active' : ''} onClick={() => setView('unassigned')}>Не назначено</button></div>{view === 'routes' && <div className="version-routes">{groupedAssignments.length ? groupedAssignments.map(([date, engineers]) => <VersionDay key={date} date={date} engineers={engineers} projectToday={projectToday} />) : <Empty title="Назначений нет" text="В этой версии нет опубликованных маршрутов." />}</div>}{view === 'changes' && <div className="plan-change-list">{safeArray(plan.changes).length ? plan.changes.map((item) => { const changedFields = changedAssignmentFields(item.old_assignment, item.new_assignment); return <article key={item.id}><div><b>Заявка #{item.job_id}</b><small>{changeReasonLabels[item.reason] || item.reason}</small></div><Badge status={item.change_type}>{changeLabels[item.change_type] || item.change_type}</Badge><p>{assignmentText(item.old_assignment)} → {assignmentText(item.new_assignment)}</p>{changedFields.length > 0 && <ul className="assignment-diff">{changedFields.map((field) => <li key={field}>{field}</li>)}</ul>}</article> }) : <Empty title="Изменений нет" text="Это первая версия либо назначения совпали с предыдущей версией." />}</div>}{view === 'unassigned' && <div className="batch-backlog">{unassigned.length ? unassigned.map((item) => <article key={item.job_id}><div><b>Заявка #{item.job_id}</b><small>SLA: {formatDate(item.sla_date)}</small></div><Badge status="PENDING">Не назначена</Badge><p>{reasonLabels[item.primary_reason_code] || item.primary_reason_code || 'Нет допустимого назначения'}</p>{item.sla_risk && <span>Есть риск нарушения SLA</span>}</article>) : <Empty title="Все заявки назначены" text="В опубликованной версии нет неназначенных заявок." />}</div>}</> : <Empty title="Опубликованного плана пока нет" text="Создайте заявку или запустите ручной расчёт. После завершения весь горизонт опубликуется автоматически." />}</section></div>
+      <section className="cascade-result">{plan.version ? <><div className="result-head"><div><span className="eyebrow">{plan.version.id === currentVersionId ? 'Опубликованный план' : 'Архивная версия'}</span><h2>Версия {plan.version.version_number}</h2><p>{triggerLabels[plan.version.trigger_source] || plan.version.trigger_source} · {formatDateTime(plan.version.published_at)}</p>{metrics.feasible_time_limit && <Badge status="PENDING">Допустимый план, оптимальность не доказана</Badge>}</div><Badge status={plan.version.is_current ? 'PUBLISHED' : 'SUPERSEDED'}>{plan.version.is_current ? 'Текущая' : 'Архив'}</Badge></div><div className="mini-stats"><div><small>Назначено</small><b>{safeArray(plan.assignments).length}</b></div><div><small>Инженеров</small><b>{routeMetrics.active_engineers ?? '—'}</b></div><div><small>Общий пробег</small><b>{routeMetrics.total_distance_meters != null ? `${(routeMetrics.total_distance_meters / 1000).toFixed(1)} км` : '—'}</b></div><div><small>Макс. маршрут</small><b>{routeMetrics.maximum_route_distance_meters != null ? `${(routeMetrics.maximum_route_distance_meters / 1000).toFixed(1)} км` : '—'}</b></div><div><small>Не назначено</small><b>{unassigned.length}</b></div><div><small>Изменений</small><b>{safeArray(plan.changes).length}</b></div><div><small>Обработано дней</small><b>{metrics.processed_days ?? '—'}</b></div></div><div className="cascade-tabs"><button className={view === 'routes' ? 'active' : ''} onClick={() => setView('routes')}>Маршруты и карта</button><button className={view === 'changes' ? 'active' : ''} onClick={() => setView('changes')}>Изменения</button><button className={view === 'unassigned' ? 'active' : ''} onClick={() => setView('unassigned')}>Не назначено</button></div>{view === 'routes' && <div className="version-routes">{groupedAssignments.length ? groupedAssignments.map(([date, engineers]) => <VersionDay key={date} date={date} engineers={engineers} projectToday={projectToday} />) : <Empty title="Назначений нет" text="В этой версии нет опубликованных маршрутов." />}</div>}{view === 'changes' && <div className="plan-change-list">{safeArray(plan.changes).length ? plan.changes.map((item) => { const changedFields = changedAssignmentFields(item.old_assignment, item.new_assignment); return <article key={item.id}><div><b>Заявка #{item.job_id}</b><small>{changeReasonLabels[item.reason] || item.reason}</small></div><Badge status={item.change_type}>{changeLabels[item.change_type] || item.change_type}</Badge><p>{assignmentText(item.old_assignment)} → {assignmentText(item.new_assignment)}</p>{changedFields.length > 0 && <ul className="assignment-diff">{changedFields.map((field) => <li key={field}>{field}</li>)}</ul>}</article> }) : <Empty title="Изменений нет" text="Это первая версия либо назначения совпали с предыдущей версией." />}</div>}{view === 'unassigned' && <div className="batch-backlog">{unassigned.length ? unassigned.map((item) => <article key={item.job_id}><div><b>Заявка #{item.job_id}</b><small>SLA: {formatDate(item.sla_date)}</small></div><Badge status="PENDING">Не назначена</Badge><p>{reasonLabels[item.primary_reason_code] || item.primary_reason_code || 'Нет допустимого назначения'}</p>{item.sla_risk && <span>Есть риск нарушения SLA</span>}</article>) : <Empty title="Все заявки назначены" text="В опубликованной версии нет неназначенных заявок." />}</div>}</> : <Empty title="Опубликованного плана пока нет" text="Создайте заявку или запустите ручной расчёт. После завершения весь горизонт опубликуется автоматически." />}</section></div>
   </>
 }

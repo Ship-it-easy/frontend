@@ -31,7 +31,7 @@ export function CheckGroup({ items, value = [], onChange, empty = 'Справо�
   return <div className="check-grid">{safeItems.map((item) => <label className="check-card" key={item.id}><input type="checkbox" checked={selected.has(Number(item.id))} onChange={() => onChange(selected.has(Number(item.id)) ? safeValue.filter((id) => Number(id) !== Number(item.id)) : [...safeValue, item.id])} /><span>{item.name}</span></label>)}</div>
 }
 
-export function AddressField({ label = 'Адрес', value, onChange, onSelect, required = true, hint }) {
+export function AddressField({ label = 'Адрес', value, onChange, onSelect, required = true, hint, suggestionsUrl = '/api/project/address-suggestions' }) {
   const [items, setItems] = useState([]), [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [searched, setSearched] = useState(false)
   const picked = useRef('')
   useEffect(() => {
@@ -39,11 +39,11 @@ export function AddressField({ label = 'Адрес', value, onChange, onSelect, 
     if (query.length < 3 || query === picked.current) { setItems([]); setOpen(false); return }
     const timer = setTimeout(async () => {
       setBusy(true); setSearched(false)
-      try { const result = await api(`/api/project/address-suggestions?q=${encodeURIComponent(query)}`); setItems(result); setOpen(true); setSearched(true) }
+      try { const result = await api(`${suggestionsUrl}?q=${encodeURIComponent(query)}`); setItems(result); setOpen(true); setSearched(true) }
       catch { setItems([]); setOpen(true); setSearched(true) } finally { setBusy(false) }
     }, 350)
     return () => clearTimeout(timer)
-  }, [value])
+  }, [value, suggestionsUrl])
   function change(event) { picked.current = ''; onChange(event.target.value) }
   function choose(item) { picked.current = item.display_name; setItems([]); setOpen(false); onChange(item.display_name); onSelect?.(item) }
   return <Field label={label} hint={hint || 'Начните вводить город, улицу и дом, затем выберите подсказку.'} className="address-control"><div className="input-icon-wrap"><Icon name="map" /><input required={required} value={value} onChange={change} onFocus={() => items.length && setOpen(true)} placeholder="Например, Пермь, улица Ленина, 58" /><span className={`input-state ${busy ? 'spin' : ''}`}>{busy ? '↻' : value === picked.current ? '✓' : ''}</span></div>{open && <div className="suggestions">{items.map((item) => <button type="button" key={`${item.latitude}-${item.longitude}-${item.display_name}`} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}><Icon name="map" /><span>{item.display_name}<small>{item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}</small></span></button>)}{!busy && searched && !items.length && <div className="suggestion-empty">Точный адрес с номером дома не найден</div>}</div>}</Field>

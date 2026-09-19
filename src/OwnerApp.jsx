@@ -1,18 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, qs } from './api.js'
 import { Badge, Button, Empty, Field, Icon, Modal, PageHeader, Shell, StatCard, Toast, formatDate } from './ui.jsx'
-import { PlanningPage } from './DispatcherApp.jsx'
+import { JobForm, JobImportModal, PlanningPage, ScheduleEditor } from './DispatcherApp.jsx'
 
 const nav = [
   { id: 'projects', label: 'Проекты', icon: 'projects' },
   { id: 'owners', label: 'Владельцы', icon: 'owners' },
+  { id: 'jobs', label: 'Заявки', icon: 'jobs' },
+  { id: 'engineers', label: 'Инженеры', icon: 'engineers' },
   { id: 'planning', label: 'Планирование', icon: 'planning' },
 ]
 
 function UserActions({ item, onChanged, notify }) {
   const [password, setPassword] = useState(false)
   async function toggle() {
-    try { await api(`/api/admin/users/${item.id}/${item.status === 'ACTIVE' ? 'block' : 'unblock'}`, { method: 'POST' }); notify('Статус пользователя обновлён'); onChanged() }
+    try { const result = await api(`/api/admin/users/${item.id}/${item.status === 'ACTIVE' ? 'block' : 'unblock'}`, { method: 'POST' }); if (result?.planning_event_id) window.sessionStorage.setItem('route-app:last-planning-event', String(result.planning_event_id)); notify(result?.planning_event_id ? `Статус обновлён. Перепланирование #${result.planning_event_id} запущено` : 'Статус пользователя обновлён'); onChanged() }
     catch (error) { notify(error.message, 'error') }
   }
   async function reset(event) {
@@ -86,8 +88,60 @@ function OwnerPlanning({ notify }) {
   return <><div className="owner-project-switch"><Field label="Проект для планирования"><select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Выберите проект</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name} · {project.planning_timezone}</option>)}</select></Field></div>{projectId ? <PlanningPage key={projectId} projectId={Number(projectId)} notify={notify} ownerMode /> : <Empty title="Нет активного проекта" text="Создайте или включите проект, чтобы запустить планирование." />}</>
 }
 
+function OwnerJobs({ notify }) {
+  const [projects, setProjects] = useState([])
+  const [projectId, setProjectId] = useState('')
+  const [jobs, setJobs] = useState([])
+  const [workTypes, setWorkTypes] = useState([])
+  const [editor, setEditor] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  useEffect(() => {
+    api('/api/admin/projects?status=ACTIVE').then((items) => {
+      const values = Array.isArray(items) ? items : []
+      setProjects(values)
+      setProjectId((current) => current || String(values[0]?.id || ''))
+    }).catch((error) => notify(error.message, 'error'))
+  }, [])
+  const load = () => projectId && api(`/api/projects/${projectId}/jobs`).then((items) => setJobs(Array.isArray(items) ? items : [])).catch((error) => notify(error.message, 'error'))
+  useEffect(() => {
+    if (!projectId) { setJobs([]); setWorkTypes([]); return }
+    void load()
+    api(`/api/projects/${projectId}/work-types`).then((items) => setWorkTypes(Array.isArray(items) ? items : [])).catch((error) => notify(error.message, 'error'))
+  }, [projectId])
+  async function cancel(job) {
+    const warning = job.status === 'IN_PROGRESS' ? '\n\nРабота уже выполняется: оставшийся маршрут инженера будет пересчитан.' : ''
+    if (!window.confirm(`Отменить заявку #${job.id}?${warning}`)) return
+    try {
+      const result = await api(`/api/projects/${projectId}/jobs/${job.id}/cancel`, { method: 'POST' })
+      if (result?.planning_event_id) window.sessionStorage.setItem('route-app:last-planning-event', String(result.planning_event_id))
+      notify(result?.planning_event_id ? `Заявка отменена. Перепланирование #${result.planning_event_id} запущено` : 'Заявка уже была отменена')
+      load()
+    } catch (error) { notify(error.message, 'error') }
+  }
+  return <><PageHeader eyebrow="Операционная работа" title="Заявки проектов" subtitle="Владелец может создавать, импортировать и отменять заявки; план перестроится автоматически." actions={projectId ? <><Button kind="secondary" onClick={() => setImportOpen(true)}>Импорт XLSX</Button><Button icon="plus" onClick={() => setEditor(true)}>Новая заявка</Button></> : null} /><div className="owner-project-switch"><Field label="Проект"><select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Выберите проект</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></Field></div>{projectId ? <div className="table-card">{jobs.length ? <table><thead><tr><th>Заявка</th><th>Адрес</th><th>Приоритет</th><th>Срок</th><th>Статус</th><th /></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td><b>#{job.id}</b></td><td className="address-cell">{job.address}</td><td><Badge status={job.priority_type}>{job.priority_type === 'EMERGENCY' ? 'Аварийная' : 'Обычная'}</Badge></td><td>{formatDate(job.sla_date)}</td><td><Badge status={job.status}>{job.status}</Badge></td><td>{['NEW', 'IN_PROGRESS'].includes(job.status) && <Button kind="danger" onClick={() => cancel(job)}>Отменить</Button>}</td></tr>)}</tbody></table> : <Empty title="Заявок нет" text="В выбранном проекте пока нет заявок." action={<Button icon="plus" onClick={() => setEditor(true)}>Создать заявку</Button>} />}</div> : <Empty title="Нет активного проекта" text="Создайте или включите проект." />}{editor && <JobForm apiBase={`/api/projects/${projectId}`} workTypes={workTypes} notify={notify} onSaved={load} onClose={() => setEditor(false)} />}{importOpen && <JobImportModal apiBase={`/api/projects/${projectId}`} notify={notify} onSaved={load} onClose={() => setImportOpen(false)} />}</>
+}
+
+function OwnerEngineers({ notify }) {
+  const [projects, setProjects] = useState([])
+  const [projectId, setProjectId] = useState('')
+  const [engineers, setEngineers] = useState([])
+  const [schedule, setSchedule] = useState(null)
+  useEffect(() => {
+    api('/api/admin/projects?status=ACTIVE').then((items) => {
+      const values = Array.isArray(items) ? items : []
+      setProjects(values)
+      setProjectId((current) => current || String(values[0]?.id || ''))
+    }).catch((error) => notify(error.message, 'error'))
+  }, [])
+  useEffect(() => {
+    if (!projectId) { setEngineers([]); return }
+    api(`/api/projects/${projectId}/engineers`).then((items) => setEngineers(Array.isArray(items) ? items : [])).catch((error) => notify(error.message, 'error'))
+  }, [projectId])
+  return <><PageHeader eyebrow="Операционная работа" title="Доступность инженеров" subtitle="Владелец может изменить смены; значимые изменения автоматически пересчитают план." /><div className="owner-project-switch"><Field label="Проект"><select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Выберите проект</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></Field></div>{projectId ? <div className="engineer-grid">{engineers.map((item) => <article className="engineer-card" key={item.id}><header><span className="avatar large">{String(item.name || '?')[0].toUpperCase()}</span><Badge status={item.active ? 'ACTIVE' : 'BLOCKED'}>{item.active ? 'Активен' : 'Неактивен'}</Badge></header><h3>{item.name || `Инженер #${item.id}`}</h3><p><Icon name="map" /> {item.start_address || 'Адрес не указан'}</p><div className="card-actions"><button onClick={() => setSchedule(item)}>Изменить график</button></div></article>)}{!engineers.length && <Empty title="Инженеров нет" text="В выбранном проекте пока нет инженеров." />}</div> : <Empty title="Нет активного проекта" text="Создайте или включите проект." />}{schedule && <ScheduleEditor engineer={schedule} apiBase={`/api/projects/${projectId}`} notify={notify} onClose={() => setSchedule(null)} />}</>
+}
+
 export default function OwnerApp({ user, onLogout }) {
   const [section, setSection] = useState('projects'), [toast, setToast] = useState(null)
   const notify = (message, type = 'info') => setToast({ message, type, key: Date.now() })
-  return <Shell user={user} roleLabel="Владелец" contextLabel="Управление продуктом" contextValue="Все проекты" nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'projects' && <Projects notify={notify} />}{section === 'owners' && <Owners notify={notify} />}{section === 'planning' && <OwnerPlanning notify={notify} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
+  return <Shell user={user} roleLabel="Владелец" contextLabel="Управление продуктом" contextValue="Все проекты" nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'projects' && <Projects notify={notify} />}{section === 'owners' && <Owners notify={notify} />}{section === 'jobs' && <OwnerJobs notify={notify} />}{section === 'engineers' && <OwnerEngineers notify={notify} />}{section === 'planning' && <OwnerPlanning notify={notify} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
 }

@@ -17,16 +17,17 @@ const activeBatchStatuses = new Set(['CREATED', 'PREPARING', 'RUNNING', 'STOP_RE
 const planningImpactText = 'Изменение не запускает автоматическое перепланирование. Оно попадёт в следующий ручной или ночной расчёт.'
 const safeArray = (value) => Array.isArray(value) ? value : []
 
-function JobForm({ item, workTypes, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({ address: item?.address || '', latitude: item?.latitude ?? null, longitude: item?.longitude ?? null, sla_date: item?.sla_date || today(), time_window_start: formatTime(item?.time_window_start) === '—' ? '' : formatTime(item?.time_window_start), time_window_end: formatTime(item?.time_window_end) === '—' ? '' : formatTime(item?.time_window_end), work_type_id: item?.work_type_id || workTypes[0]?.id || '' })
+export function JobForm({ item, workTypes, onClose, onSaved, notify, apiBase = '/api/project' }) {
+  const [form, setForm] = useState({ address: item?.address || '', latitude: item?.latitude ?? null, longitude: item?.longitude ?? null, sla_date: item?.sla_date || today(), time_window_start: formatTime(item?.time_window_start) === '—' ? '' : formatTime(item?.time_window_start), time_window_end: formatTime(item?.time_window_end) === '—' ? '' : formatTime(item?.time_window_end), work_type_id: item?.work_type_id || workTypes[0]?.id || '', priority_type: item?.priority_type || 'NORMAL' })
   const [busy, setBusy] = useState(false)
   async function submit(event) {
     event.preventDefault()
     if (item && !window.confirm(`${planningImpactText}\n\nСохранить изменения заявки?`)) return
     setBusy(true)
     const payload = { ...form, work_type_id: Number(form.work_type_id), time_window_start: form.time_window_start || null, time_window_end: form.time_window_end || null }
+    if (item) delete payload.priority_type
     try {
-      const result = await api(item ? `/api/project/jobs/${item.id}` : '/api/project/jobs', { method: item ? 'PATCH' : 'POST', body: JSON.stringify(payload) })
+      const result = await api(item ? `${apiBase}/jobs/${item.id}` : `${apiBase}/jobs`, { method: item ? 'PATCH' : 'POST', body: JSON.stringify(payload) })
       if (result?.planning_event_id) {
         window.sessionStorage.setItem('route-app:last-planning-event', String(result.planning_event_id))
         notify(`Заявка создана. Перепланирование #${result.planning_event_id} поставлено в обработку`)
@@ -36,34 +37,78 @@ function JobForm({ item, workTypes, onClose, onSaved, notify }) {
     catch (error) { notify(error.message, 'error') } finally { setBusy(false) }
   }
   return <Modal wide title={item ? `Заявка #${item.id}` : 'Новая заявка'} subtitle="Адрес, срок, доступное время и тип работы" onClose={onClose}><form className="stack-form" onSubmit={submit}>
-    <AddressField value={form.address} onChange={(address) => setForm({ ...form, address, latitude: null, longitude: null })} onSelect={(choice) => setForm({ ...form, address: choice.display_name, latitude: choice.latitude, longitude: choice.longitude })} />
-    <div className="form-grid"><Field label="Крайний срок"><input type="date" required value={form.sla_date} onChange={(event) => setForm({ ...form, sla_date: event.target.value })} /></Field><Field label="Тип работ"><select required value={form.work_type_id} onChange={(event) => setForm({ ...form, work_type_id: event.target.value })}><option value="">Выберите тип</option>{workTypes.filter((type) => type.active || type.id === item?.work_type_id).map((type) => <option key={type.id} value={type.id}>{type.name} · {type.default_service_duration_min} мин</option>)}</select></Field><Field label="Окно с"><input type="time" value={form.time_window_start} onChange={(event) => setForm({ ...form, time_window_start: event.target.value })} /></Field><Field label="Окно до"><input type="time" value={form.time_window_end} onChange={(event) => setForm({ ...form, time_window_end: event.target.value })} /></Field></div>
+    <AddressField suggestionsUrl={`${apiBase}/address-suggestions`} value={form.address} onChange={(address) => setForm({ ...form, address, latitude: null, longitude: null })} onSelect={(choice) => setForm({ ...form, address: choice.display_name, latitude: choice.latitude, longitude: choice.longitude })} />
+    <div className="form-grid"><Field label="Крайний срок"><input type="date" required value={form.sla_date} onChange={(event) => setForm({ ...form, sla_date: event.target.value })} /></Field><Field label="Тип работ"><select required value={form.work_type_id} onChange={(event) => setForm({ ...form, work_type_id: event.target.value })}><option value="">Выберите тип</option>{workTypes.filter((type) => type.active || type.id === item?.work_type_id).map((type) => <option key={type.id} value={type.id}>{type.name} · {type.default_service_duration_min} мин</option>)}</select></Field><Field label="Приоритет"><select disabled={!!item} value={form.priority_type} onChange={(event) => setForm({ ...form, priority_type: event.target.value })}><option value="NORMAL">Обычная</option><option value="EMERGENCY">Аварийная</option></select></Field><Field label="Окно с"><input type="time" value={form.time_window_start} onChange={(event) => setForm({ ...form, time_window_start: event.target.value })} /></Field><Field label="Окно до"><input type="time" value={form.time_window_end} onChange={(event) => setForm({ ...form, time_window_end: event.target.value })} /></Field></div>
     <div className="form-note">Длительность подставится из выбранного типа работ. Если время не указано, заявка доступна в течение смены.</div>{item && <div className="planning-impact-warning">{planningImpactText}</div>}<div className="form-actions"><Button type="button" kind="ghost" onClick={onClose}>Отмена</Button><Button disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div>
   </form></Modal>
+}
+
+export function JobImportModal({ apiBase = '/api/project', onClose, onSaved, notify }) {
+  const [file, setFile] = useState(null)
+  const [preview, setPreview] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  async function upload(mode) {
+    if (!file) { notify('Выберите XLSX-файл', 'error'); return }
+    setBusy(true)
+    const body = new FormData()
+    body.append('file', file)
+    try {
+      const result = await api(`${apiBase}/jobs/import/${mode}`, { method: 'POST', body })
+      if (mode === 'preview') {
+        setPreview(result)
+        if (safeArray(result.errors).length) notify('Исправьте ошибки файла перед импортом', 'error')
+      } else {
+        if (safeArray(result.errors).length) { setPreview(result); notify('Файл не записан: исправьте ошибки', 'error'); return }
+        if (result?.planning_event_id) window.sessionStorage.setItem('route-app:last-planning-event', String(result.planning_event_id))
+        notify(`Импортировано заявок: ${result.created_count || 0}${result?.planning_event_id ? `. Перепланирование #${result.planning_event_id} запущено` : ''}`)
+        onSaved(); onClose()
+      }
+    } catch (error) { notify(error.message, 'error') } finally { setBusy(false) }
+  }
+
+  const errors = safeArray(preview?.errors)
+  const rows = safeArray(preview?.preview)
+  return <Modal wide title="Импорт заявок" subtitle="XLSX: address, sla_date, work_type и необязательный priority_type" onClose={onClose}>
+    <div className="stack-form">
+      <Field label="Файл XLSX"><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => { setFile(event.target.files?.[0] || null); setPreview(null) }} /></Field>
+      <div className="form-note">priority_type: NORMAL / EMERGENCY или «Обычная» / «Аварийная». Пустое значение — «Обычная». При любой ошибке файл целиком не записывается.</div>
+      {preview && <div className={errors.length ? 'stale-warning' : 'planning-impact-warning'}>{errors.length ? `Ошибок: ${errors.length}. Валидных строк: ${preview.valid_rows ?? 0}.` : `Проверено строк: ${preview.valid_rows ?? rows.length}. Файл готов к импорту.`}</div>}
+      {!!errors.length && <div className="history"><h3>Ошибки файла</h3>{errors.map((item, index) => <div key={`${item.row}-${index}`}><span /><b>Строка {item.row || '—'}</b><small>{item.error}</small></div>)}</div>}
+      {!!rows.length && <div className="table-card"><table><thead><tr><th>Адрес</th><th>SLA</th><th>Тип работ</th><th>Приоритет</th></tr></thead><tbody>{rows.slice(0, 20).map((item, index) => <tr key={`${item.external_id || item.address}-${index}`}><td>{item.address}</td><td>{formatDate(item.sla_date)}</td><td>{item.work_type}</td><td><Badge status={item.priority_type}>{item.priority_type === 'EMERGENCY' ? 'Аварийная' : 'Обычная'}</Badge></td></tr>)}</tbody></table></div>}
+      <div className="form-actions"><Button type="button" kind="ghost" onClick={onClose}>Отмена</Button><Button type="button" kind="secondary" disabled={busy || !file} onClick={() => upload('preview')}>{busy ? 'Проверяем…' : 'Проверить файл'}</Button><Button type="button" disabled={busy || !preview || errors.length > 0} onClick={() => upload('apply')}>Импортировать</Button></div>
+    </div>
+  </Modal>
 }
 
 function JobDetails({ job, workTypes, onClose, onEdit, onChanged, notify }) {
   const type = workTypes.find((item) => item.id === job.work_type_id)
   async function cancel() {
-    if (!window.confirm(`Отменить заявку #${job.id}?`)) return
-    try { await api(`/api/project/jobs/${job.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'CANCELLED', reason: 'Отменена диспетчером' }) }); notify('Заявка отменена'); onChanged(); onClose() }
+    const warning = job.status === 'IN_PROGRESS' ? '\n\nИнженер уже в пути или выполняет работу. Текущая точка будет использована как начало пересчитанного маршрута.' : ''
+    if (!window.confirm(`Отменить заявку #${job.id}?${warning}`)) return
+    try {
+      const result = await api(`/api/project/jobs/${job.id}/cancel`, { method: 'POST' })
+      if (result?.planning_event_id) window.sessionStorage.setItem('route-app:last-planning-event', String(result.planning_event_id))
+      notify(result?.planning_event_id ? `Заявка отменена. Перепланирование #${result.planning_event_id} запущено` : 'Заявка уже была отменена')
+      onChanged(); onClose()
+    }
     catch (error) { notify(error.message, 'error') }
   }
-  return <Modal wide title={`Заявка #${job.id}`} subtitle={job.address} onClose={onClose}><div className="detail-grid"><div><small>Статус</small><Badge status={job.status}>{statusLabels[job.status]}</Badge></div><div><small>Тип работ</small><b>{type?.name || `#${job.work_type_id}`}</b></div><div><small>Крайний срок</small><b>{formatDate(job.sla_date)}</b></div><div><small>Временное окно</small><b>{job.time_window_start ? `${formatTime(job.time_window_start)}–${formatTime(job.time_window_end)}` : 'В течение смены'}</b></div><div><small>Длительность</small><b>{job.service_duration_min || type?.default_service_duration_min || '—'} мин</b></div><div><small>Координаты</small><b>{job.latitude ? `${Number(job.latitude).toFixed(5)}, ${Number(job.longitude).toFixed(5)}` : 'Определятся при расчёте'}</b></div><div><small>Создана</small><b>{formatDateTime(job.created_at)}</b></div><div><small>Назначение</small><b>{job.assignment ? `Инженер #${job.assignment.engineer_id}, ${formatDateTime(job.assignment.planned_start)}` : 'Не назначена'}</b></div></div>
-    {!!job.status_history?.length && <div className="history"><h3>История статусов</h3>{job.status_history.map((item) => <div key={item.id}><span /><b>{statusLabels[item.to_status] || item.to_status}</b><small>{formatDateTime(item.created_at)}{item.reason ? ` · ${item.reason}` : ''}</small></div>)}</div>}
-    <div className="form-actions">{job.status === 'NEW' && <><Button kind="danger" onClick={cancel}>Отменить заявку</Button><Button onClick={onEdit}>Изменить</Button></>}</div></Modal>
+  return <Modal wide title={`Заявка #${job.id}`} subtitle={job.address} onClose={onClose}><div className="detail-grid"><div><small>Статус</small><Badge status={job.status}>{statusLabels[job.status]}</Badge></div><div><small>Приоритет</small><Badge status={job.priority_type}>{job.priority_type === 'EMERGENCY' ? 'Аварийная' : 'Обычная'}</Badge></div><div><small>Тип работ</small><b>{type?.name || `#${job.work_type_id}`}</b></div><div><small>Крайний срок</small><b>{formatDate(job.sla_date)}</b></div><div><small>Временное окно</small><b>{job.time_window_start ? `${formatTime(job.time_window_start)}–${formatTime(job.time_window_end)}` : 'В течение смены'}</b></div><div><small>Длительность</small><b>{job.service_duration_min || type?.default_service_duration_min || '—'} мин</b></div><div><small>Координаты</small><b>{job.latitude ? `${Number(job.latitude).toFixed(5)}, ${Number(job.longitude).toFixed(5)}` : 'Определятся при расчёте'}</b></div><div><small>Создана</small><b>{formatDateTime(job.created_at)}</b></div><div><small>Назначение</small><b>{job.assignment ? `Инженер #${job.assignment.engineer_id}, ${formatDateTime(job.assignment.planned_start)}` : 'Не назначена'}</b></div></div>
+    {!!job.status_history?.length && <div className="history"><h3>История статусов</h3>{job.status_history.map((item) => <div key={item.id}><span /><b>{statusLabels[item.new_status] || item.new_status}</b><small>{formatDateTime(item.created_at)}{item.reason ? ` · ${item.reason}` : ''}</small></div>)}</div>}
+    <div className="form-actions">{['NEW', 'IN_PROGRESS'].includes(job.status) && <Button kind="danger" onClick={cancel}>Отменить заявку</Button>}{job.status === 'NEW' && <Button onClick={onEdit}>Изменить</Button>}</div></Modal>
 }
 
 function JobsPage({ workTypes, notify }) {
-  const [data, setData] = useState({ items: [], total: 0 }), [filters, setFilters] = useState({ search: '', status: '', work_type_id: '' }), [editor, setEditor] = useState(false), [selected, setSelected] = useState(null)
+  const [data, setData] = useState({ items: [], total: 0 }), [filters, setFilters] = useState({ search: '', status: '', work_type_id: '' }), [editor, setEditor] = useState(false), [selected, setSelected] = useState(null), [importOpen, setImportOpen] = useState(false)
   const load = () => api(`/api/project/jobs${qs({ ...filters, limit: 200 })}`).then((value) => setData({ ...(value || {}), items: Array.isArray(value?.items) ? value.items : [], total: Number(value?.total || 0) })).catch((error) => notify(error.message, 'error'))
   useEffect(() => { const timer = setTimeout(load, 180); return () => clearTimeout(timer) }, [filters.search, filters.status, filters.work_type_id])
   const counts = useMemo(() => ['NEW', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].map((status) => data.items.filter((item) => item.status === status).length), [data])
-  return <><PageHeader eyebrow="Операционная работа" title="Заявки" subtitle="Контролируйте сроки, статусы и назначения." actions={<Button icon="plus" onClick={() => setEditor(true)}>Новая заявка</Button>} />
+  return <><PageHeader eyebrow="Операционная работа" title="Заявки" subtitle="Контролируйте сроки, статусы и назначения." actions={<><Button kind="secondary" onClick={() => setImportOpen(true)}>Импорт XLSX</Button><Button icon="plus" onClick={() => setEditor(true)}>Новая заявка</Button></>} />
     <div className="stats-grid"><StatCard label="Новые" value={counts[0]} /><StatCard label="В работе" value={counts[1]} tone="amber" /><StatCard label="Выполнены" value={counts[2]} tone="green" /><StatCard label="Отменены" value={counts[3]} tone="gray" /></div>
     <div className="table-card"><div className="filters embedded"><div className="search-field"><Icon name="search" /><input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Адрес" /></div><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Все статусы</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={filters.work_type_id} onChange={(event) => setFilters({ ...filters, work_type_id: event.target.value })}><option value="">Все типы работ</option>{workTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></div>
-      {data.items.length ? <table><thead><tr><th>Создана</th><th>Адрес</th><th>Тип работ</th><th>Крайний срок</th><th>Статус</th><th /></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><b>{formatDate(item.created_at)}</b><small>{new Date(item.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</small></td><td className="address-cell">{item.address}</td><td>{workTypes.find((type) => type.id === item.work_type_id)?.name || `#${item.work_type_id}`}</td><td>{formatDate(item.sla_date)}{item.time_window_start && <small>{formatTime(item.time_window_start)}–{formatTime(item.time_window_end)}</small>}</td><td><Badge status={item.status}>{statusLabels[item.status]}</Badge></td><td><button className="text-action" onClick={() => setSelected(item)}>Открыть <Icon name="chevron" /></button></td></tr>)}</tbody></table> : <Empty title="Заявок пока нет" text="Создайте первую заявку — она сразу появится в списке." action={<Button icon="plus" onClick={() => setEditor(true)}>Создать заявку</Button>} />}</div>
-    {editor && <JobForm item={typeof editor === 'object' ? editor : null} workTypes={workTypes} notify={notify} onSaved={load} onClose={() => setEditor(false)} />}{selected && <JobDetails job={selected} workTypes={workTypes} notify={notify} onClose={() => setSelected(null)} onChanged={load} onEdit={() => { setEditor(selected); setSelected(null) }} />}
+      {data.items.length ? <table><thead><tr><th>Создана</th><th>Адрес</th><th>Тип работ</th><th>Приоритет</th><th>Крайний срок</th><th>Статус</th><th /></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><b>{formatDate(item.created_at)}</b><small>{new Date(item.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</small></td><td className="address-cell">{item.address}</td><td>{workTypes.find((type) => type.id === item.work_type_id)?.name || `#${item.work_type_id}`}</td><td><Badge status={item.priority_type}>{item.priority_type === 'EMERGENCY' ? 'Аварийная' : 'Обычная'}</Badge></td><td>{formatDate(item.sla_date)}{item.time_window_start && <small>{formatTime(item.time_window_start)}–{formatTime(item.time_window_end)}</small>}</td><td><Badge status={item.status}>{statusLabels[item.status]}</Badge></td><td><button className="text-action" onClick={() => setSelected(item)}>Открыть <Icon name="chevron" /></button></td></tr>)}</tbody></table> : <Empty title="Заявок пока нет" text="Создайте первую заявку — она сразу появится в списке." action={<Button icon="plus" onClick={() => setEditor(true)}>Создать заявку</Button>} />}</div>
+    {editor && <JobForm item={typeof editor === 'object' ? editor : null} workTypes={workTypes} notify={notify} onSaved={load} onClose={() => setEditor(false)} />}{importOpen && <JobImportModal notify={notify} onSaved={load} onClose={() => setImportOpen(false)} />}{selected && <JobDetails job={selected} workTypes={workTypes} notify={notify} onClose={() => setSelected(null)} onChanged={load} onEdit={() => { setEditor(selected); setSelected(null) }} />}
   </>
 }
 
@@ -72,15 +117,21 @@ function EngineerForm({ item, qualifications, onClose, onSaved, notify }) {
   const [busy, setBusy] = useState(false)
   async function submit(event) {
     event.preventDefault()
-    if (item && !window.confirm(`${planningImpactText}\n\nСохранить изменения инженера?`)) return
+    const availabilityChanged = item && form.active !== item.active
+    const impact = availabilityChanged ? 'Изменение доступности может автоматически перестроить опубликованный план.' : planningImpactText
+    if (item && !window.confirm(`${impact}\n\nСохранить изменения инженера?`)) return
     setBusy(true)
     const engineer = { name: form.name, active: form.active, transport_type: form.transport_type, start_address: form.start_address, start_latitude: form.start_latitude, start_longitude: form.start_longitude, qualification_ids: form.qualification_ids }
     try {
-      await api(item ? `/api/project/engineers/${item.id}` : '/api/project/engineers', { method: item ? 'PATCH' : 'POST', body: JSON.stringify(engineer) })
-      notify(item ? 'Инженер обновлён' : 'Инженер создан'); onSaved(); onClose()
+      const result = await api(item ? `/api/project/engineers/${item.id}` : '/api/project/engineers', { method: item ? 'PATCH' : 'POST', body: JSON.stringify(engineer) })
+      if (result?.planning_event_id) {
+        window.sessionStorage.setItem('route-app:last-planning-event', String(result.planning_event_id))
+        notify(`Инженер обновлён. Перепланирование #${result.planning_event_id} запущено`)
+      } else notify(item ? 'Инженер обновлён' : 'Инженер создан')
+      onSaved(); onClose()
     } catch (error) { notify(error.message, 'error') } finally { setBusy(false) }
   }
-  return <Modal wide title={item ? item.name : 'Новый инженер'} subtitle="Профиль, транспорт и квалификации" onClose={onClose}><form className="stack-form" onSubmit={submit}><Field label="Имя"><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><label className="switch-row"><span><b>Участвует в расчётах</b><small>Неактивному инженеру новые заявки не назначаются</small></span><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /></label><Field label="Транспорт"><select value={form.transport_type} onChange={(event) => setForm({ ...form, transport_type: event.target.value })}><option value="NONE">Без автомобиля · пешком</option><option value="CAR">Автомобиль</option></select></Field><AddressField label="Стартовый адрес" value={form.start_address} onChange={(start_address) => setForm({ ...form, start_address, start_latitude: null, start_longitude: null })} onSelect={(choice) => setForm({ ...form, start_address: choice.display_name, start_latitude: choice.latitude, start_longitude: choice.longitude })} /><div><div className="section-label">Квалификации</div><CheckGroup items={qualifications.filter((item) => item.active)} value={form.qualification_ids} onChange={(qualification_ids) => setForm({ ...form, qualification_ids })} /></div>{item && <div className="planning-impact-warning">{planningImpactText}</div>}<div className="form-actions"><Button type="button" kind="ghost" onClick={onClose}>Отмена</Button><Button disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div></form></Modal>
+  return <Modal wide title={item ? item.name : 'Новый инженер'} subtitle="Профиль, транспорт и квалификации" onClose={onClose}><form className="stack-form" onSubmit={submit}><Field label="Имя"><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><label className="switch-row"><span><b>Участвует в расчётах</b><small>Неактивному инженеру новые заявки не назначаются</small></span><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /></label><Field label="Транспорт"><select value={form.transport_type} onChange={(event) => setForm({ ...form, transport_type: event.target.value })}><option value="NONE">Без автомобиля · пешком</option><option value="CAR">Автомобиль</option></select></Field><AddressField label="Стартовый адрес" value={form.start_address} onChange={(start_address) => setForm({ ...form, start_address, start_latitude: null, start_longitude: null })} onSelect={(choice) => setForm({ ...form, start_address: choice.display_name, start_latitude: choice.latitude, start_longitude: choice.longitude })} /><div><div className="section-label">Квалификации</div><CheckGroup items={qualifications.filter((item) => item.active)} value={form.qualification_ids} onChange={(qualification_ids) => setForm({ ...form, qualification_ids })} /></div>{item && <div className="planning-impact-warning">{form.active !== item.active ? 'Изменение доступности может автоматически перестроить опубликованный план.' : planningImpactText}</div>}<div className="form-actions"><Button type="button" kind="ghost" onClick={onClose}>Отмена</Button><Button disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div></form></Modal>
 }
 
 const weekdayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
@@ -88,8 +139,15 @@ const monthNames = ['Январь', 'Февраль', 'Март', 'Апрель'
 const dateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 const localDate = (value) => { const [year, month, day] = String(value).split('-').map(Number); return new Date(year, month - 1, day) }
 const monthBounds = (date) => ({ from: dateKey(new Date(date.getFullYear(), date.getMonth(), 1)), to: dateKey(new Date(date.getFullYear(), date.getMonth() + 1, 0)) })
+const timeInZone = (value, timeZone) => {
+  if (!value) return null
+  const parts = new Intl.DateTimeFormat('ru-RU', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(value))
+  const hour = parts.find((item) => item.type === 'hour')?.value
+  const minute = parts.find((item) => item.type === 'minute')?.value
+  return hour && minute ? `${hour}:${minute}` : null
+}
 
-function ScheduleEditor({ engineer, onClose, notify }) {
+export function ScheduleEditor({ engineer, onClose, notify, apiBase = '/api/project' }) {
   const initialMonth = localDate(today())
   const [month, setMonth] = useState(new Date(initialMonth.getFullYear(), initialMonth.getMonth(), 1))
   const [schedule, setSchedule] = useState({})
@@ -103,14 +161,14 @@ function ScheduleEditor({ engineer, onClose, notify }) {
 
   useEffect(() => {
     let active = true
-    api(`/api/project/engineers/${engineer.id}`).then((value) => {
+    api(`${apiBase}/engineers/${engineer.id}`).then((value) => {
       if (!active) return
       const entries = {}
       safeArray(value?.schedule).forEach((item) => { entries[item.work_date] = { start: formatTime(item.shift_start), end: formatTime(item.shift_end) } })
       setSchedule(entries)
     }).catch((error) => notify(error.message, 'error')).finally(() => active && setLoading(false))
     return () => { active = false }
-  }, [engineer.id])
+  }, [apiBase, engineer.id])
 
   const calendarDays = useMemo(() => {
     const first = new Date(month.getFullYear(), month.getMonth(), 1)
@@ -165,14 +223,32 @@ function ScheduleEditor({ engineer, onClose, notify }) {
   }
   async function save() {
     if (!dirty.size) return
-    if (!window.confirm(`${planningImpactText}\n\nСохранить график?`)) return
+    const affectedDates = [...dirty].sort()
+    let affectedAssignments = 0
+    try {
+      const currentPlan = await api(`${apiBase}/planning/current`)
+      affectedAssignments = safeArray(currentPlan?.assignments).filter((assignment) => {
+        if (!['NEW', 'IN_PROGRESS'].includes(assignment.status) || Number(assignment.engineer_id) !== Number(engineer.id) || !dirty.has(assignment.planning_date)) return false
+        const nextShift = schedule[assignment.planning_date]
+        if (!nextShift) return true
+        const start = timeInZone(assignment.planned_start, currentPlan.timezone)
+        const finish = timeInZone(assignment.planned_finish, currentPlan.timezone)
+        return !start || !finish || start < nextShift.start || finish > nextShift.end
+      }).length
+    } catch (error) { notify(`Не удалось проверить влияние графика: ${error.message}`, 'error'); return }
+    const datePreview = affectedDates.length <= 8 ? affectedDates.map(formatDate).join(', ') : `${affectedDates.slice(0, 8).map(formatDate).join(', ')} и ещё ${affectedDates.length - 8}`
+    if (!window.confirm(`Затрагиваемые даты: ${datePreview}\nАктивных назначений за новой границей: ${affectedAssignments}.\n\nСохранить график? При материальном влиянии план будет пересчитан автоматически.`)) return
     setBusy(true)
-    const entries = [...dirty].sort().map((work_date) => schedule[work_date]
+    const entries = affectedDates.map((work_date) => schedule[work_date]
       ? { work_date, working: true, shift_start: schedule[work_date].start, shift_end: schedule[work_date].end }
       : { work_date, working: false, shift_start: null, shift_end: null })
     try {
-      await api(`/api/project/engineers/${engineer.id}/schedule`, { method: 'PUT', body: JSON.stringify({ entries }) })
-      notify('График инженера сохранён'); onClose()
+      const result = await api(`${apiBase}/engineers/${engineer.id}/availability`, { method: 'PATCH', body: JSON.stringify({ entries }) })
+      if (result?.planning_event_id) {
+        window.sessionStorage.setItem('route-app:last-planning-event', String(result.planning_event_id))
+        notify(`График сохранён. Перепланирование #${result.planning_event_id} запущено`)
+      } else notify('График инженера сохранён — назначенный план не затронут')
+      onClose()
     } catch (error) { notify(error.message, 'error') } finally { setBusy(false) }
   }
   function close() {
@@ -180,9 +256,9 @@ function ScheduleEditor({ engineer, onClose, notify }) {
     onClose()
   }
 
-  return <Modal wide title={`График · ${engineer.name}`} subtitle="Одна непрерывная смена на дату. Изменения учитываются при следующем расчёте." onClose={close}>
+  return <Modal wide title={`График · ${engineer.name}`} subtitle="Одна непрерывная смена на дату. Значимые изменения автоматически пересчитывают опубликованный план." onClose={close}>
     {loading ? <div className="schedule-loading">Загружаем график…</div> : <div className="schedule-editor">
-      <div className="planning-impact-warning">{planningImpactText}</div>
+      <div className="planning-impact-warning">Если инженер становится недоступен или снова доступен внутри опубликованного горизонта, перепланирование запускается автоматически.</div>
       <section className="schedule-bulk"><h3>Массовое заполнение</h3><div className="schedule-bulk-fields"><Field label="Период с"><input type="date" value={bulk.from} onChange={(event) => setBulk({ ...bulk, from: event.target.value })} /></Field><Field label="по"><input type="date" value={bulk.to} onChange={(event) => setBulk({ ...bulk, to: event.target.value })} /></Field><Field label="Начало"><input type="time" value={bulk.start} onChange={(event) => setBulk({ ...bulk, start: event.target.value })} /></Field><Field label="Окончание"><input type="time" value={bulk.end} onChange={(event) => setBulk({ ...bulk, end: event.target.value })} /></Field></div><div className="weekday-picker">{weekdayNames.map((name, index) => { const value = index + 1; return <button type="button" className={bulk.weekdays.includes(value) ? 'active' : ''} key={name} onClick={() => setBulk({ ...bulk, weekdays: bulk.weekdays.includes(value) ? bulk.weekdays.filter((day) => day !== value) : [...bulk.weekdays, value] })}>{name}</button> })}</div><Button type="button" kind="secondary" onClick={applyBulk}>Применить к периоду</Button></section>
       <section className="schedule-calendar"><header><button type="button" aria-label="Предыдущий месяц" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}>‹</button><h3>{monthNames[month.getMonth()]} {month.getFullYear()}</h3><button type="button" aria-label="Следующий месяц" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}>›</button></header><div className="calendar-grid calendar-weekdays">{weekdayNames.map((name) => <span key={name}>{name}</span>)}</div><div className="calendar-grid">{calendarDays.map((day) => { const entry = schedule[day.key]; return <button type="button" key={day.key} className={`${day.current ? '' : 'outside'} ${entry ? 'working' : 'day-off'} ${selected.has(day.key) ? 'selected' : ''}`} onClick={() => toggleDate(day.key)}><b>{day.number}</b><small>{entry ? `${entry.start}–${entry.end}` : 'Выходной'}</small></button> })}</div><div className="calendar-legend"><span><i className="working" /> Рабочий день</span><span><i className="selected" /> Выбрано</span><span>{selected.size ? `Выбрано дат: ${selected.size}` : 'Нажмите на даты для выбора'}</span></div></section>
       <section className="schedule-selection"><div><h3>Выбранные даты</h3><p>Задайте общее время или сделайте выбранные даты выходными.</p></div><Field label="Начало"><input type="time" value={shift.start} onChange={(event) => setShift({ ...shift, start: event.target.value })} /></Field><Field label="Окончание"><input type="time" value={shift.end} onChange={(event) => setShift({ ...shift, end: event.target.value })} /></Field><Button type="button" kind="secondary" onClick={applySelected}>Задать смену</Button><Button type="button" kind="danger" onClick={makeSelectedDaysOff}>Сделать выходными</Button></section>
@@ -195,7 +271,7 @@ function EngineerAccess({ engineer, onClose, onChanged, notify }) {
   const [form, setForm] = useState({ login: '', password: '' }), [busy, setBusy] = useState(false)
   async function create(event) { event.preventDefault(); setBusy(true); try { await api(`/api/project/engineers/${engineer.id}/access`, { method: 'POST', body: JSON.stringify(form) }); notify('Доступ инженера создан'); onChanged(); onClose() } catch (error) { notify(error.message, 'error') } finally { setBusy(false) } }
   async function reset(event) { event.preventDefault(); setBusy(true); try { await api(`/api/project/engineers/${engineer.id}/reset-password`, { method: 'POST', body: JSON.stringify({ password: form.password }) }); notify('Пароль изменён'); onClose() } catch (error) { notify(error.message, 'error') } finally { setBusy(false) } }
-  async function toggle() { try { await api(`/api/project/engineers/${engineer.id}/access/${engineer.access.status === 'ACTIVE' ? 'block' : 'unblock'}`, { method: 'POST' }); notify('Статус доступа обновлён'); onChanged(); onClose() } catch (error) { notify(error.message, 'error') } }
+  async function toggle() { try { const result = await api(`/api/project/engineers/${engineer.id}/access/${engineer.access.status === 'ACTIVE' ? 'block' : 'unblock'}`, { method: 'POST' }); if (result?.planning_event_id) window.sessionStorage.setItem('route-app:last-planning-event', String(result.planning_event_id)); notify(result?.planning_event_id ? `Статус доступа обновлён. Перепланирование #${result.planning_event_id} запущено` : 'Статус доступа обновлён'); onChanged(); onClose() } catch (error) { notify(error.message, 'error') } }
   return <Modal title={`Доступ · ${engineer.name}`} subtitle={engineer.access ? `Логин: ${engineer.access.login}` : 'Создайте учётную запись кабинета инженера'} onClose={onClose}><form className="stack-form" onSubmit={engineer.access ? reset : create}>{!engineer.access && <Field label="Логин"><input required value={form.login} onChange={(event) => setForm({ ...form, login: event.target.value })} /></Field>}<Field label={engineer.access ? 'Новый пароль' : 'Пароль'}><input type="password" required value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Field><div className="form-actions">{engineer.access && <Button type="button" kind={engineer.access.status === 'ACTIVE' ? 'danger' : 'secondary'} onClick={toggle}>{engineer.access.status === 'ACTIVE' ? 'Заблокировать' : 'Разблокировать'}</Button>}<Button disabled={busy}>{engineer.access ? 'Сменить пароль' : 'Создать доступ'}</Button></div></form></Modal>
 }
 
