@@ -41,44 +41,6 @@ export function JobForm({ item, workTypes, onClose, onSaved, notify, apiBase = '
   </form></Modal>
 }
 
-export function JobImportModal({ apiBase = '/api/project', onClose, onSaved, notify }) {
-  const [file, setFile] = useState(null)
-  const [preview, setPreview] = useState(null)
-  const [busy, setBusy] = useState(false)
-
-  async function upload(mode) {
-    if (!file) { notify('Выберите XLSX-файл', 'error'); return }
-    setBusy(true)
-    const body = new FormData()
-    body.append('file', file)
-    try {
-      const result = await api(`${apiBase}/jobs/import/${mode}`, { method: 'POST', body })
-      if (mode === 'preview') {
-        setPreview(result)
-        if (safeArray(result.errors).length) notify('Исправьте ошибки файла перед импортом', 'error')
-      } else {
-        if (safeArray(result.errors).length) { setPreview(result); notify('Файл не записан: исправьте ошибки', 'error'); return }
-        if (result?.planning_event_id) window.sessionStorage.setItem('route-app:last-planning-event', String(result.planning_event_id))
-        notify(`Импортировано заявок: ${result.created_count || 0}${result?.planning_event_id ? `. Перепланирование #${result.planning_event_id} запущено` : ''}`)
-        onSaved(); onClose()
-      }
-    } catch (error) { notify(error.message, 'error') } finally { setBusy(false) }
-  }
-
-  const errors = safeArray(preview?.errors)
-  const rows = safeArray(preview?.preview)
-  return <Modal wide title="Импорт заявок" subtitle="XLSX: address, sla_date, work_type и необязательный priority_type" onClose={onClose}>
-    <div className="stack-form">
-      <Field label="Файл XLSX"><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => { setFile(event.target.files?.[0] || null); setPreview(null) }} /></Field>
-      <div className="form-note">priority_type: NORMAL / EMERGENCY или «Обычная» / «Аварийная». Пустое значение — «Обычная». При любой ошибке файл целиком не записывается.</div>
-      {preview && <div className={errors.length ? 'stale-warning' : 'planning-impact-warning'}>{errors.length ? `Ошибок: ${errors.length}. Валидных строк: ${preview.valid_rows ?? 0}.` : `Проверено строк: ${preview.valid_rows ?? rows.length}. Файл готов к импорту.`}</div>}
-      {!!errors.length && <div className="history"><h3>Ошибки файла</h3>{errors.map((item, index) => <div key={`${item.row}-${index}`}><span /><b>Строка {item.row || '—'}</b><small>{item.error}</small></div>)}</div>}
-      {!!rows.length && <div className="table-card"><table><thead><tr><th>Адрес</th><th>SLA</th><th>Тип работ</th><th>Приоритет</th></tr></thead><tbody>{rows.slice(0, 20).map((item, index) => <tr key={`${item.external_id || item.address}-${index}`}><td>{item.address}</td><td>{formatDate(item.sla_date)}</td><td>{item.work_type}</td><td><Badge status={item.priority_type}>{item.priority_type === 'EMERGENCY' ? 'Аварийная' : 'Обычная'}</Badge></td></tr>)}</tbody></table></div>}
-      <div className="form-actions"><Button type="button" kind="ghost" onClick={onClose}>Отмена</Button><Button type="button" kind="secondary" disabled={busy || !file} onClick={() => upload('preview')}>{busy ? 'Проверяем…' : 'Проверить файл'}</Button><Button type="button" disabled={busy || !preview || errors.length > 0} onClick={() => upload('apply')}>Импортировать</Button></div>
-    </div>
-  </Modal>
-}
-
 function JobDetails({ job, workTypes, onClose, onEdit, onChanged, notify }) {
   const type = workTypes.find((item) => item.id === job.work_type_id)
   async function cancel() {
@@ -97,16 +59,17 @@ function JobDetails({ job, workTypes, onClose, onEdit, onChanged, notify }) {
     <div className="form-actions">{['NEW', 'IN_PROGRESS'].includes(job.status) && <Button kind="danger" onClick={cancel}>Отменить заявку</Button>}{job.status === 'NEW' && <Button onClick={onEdit}>Изменить</Button>}</div></Modal>
 }
 
-function JobsPage({ workTypes, notify }) {
-  const [data, setData] = useState({ items: [], total: 0 }), [filters, setFilters] = useState({ search: '', status: '', work_type_id: '' }), [editor, setEditor] = useState(false), [selected, setSelected] = useState(null), [importOpen, setImportOpen] = useState(false)
-  const load = () => api(`/api/project/jobs${qs({ ...filters, limit: 200 })}`).then((value) => setData({ ...(value || {}), items: Array.isArray(value?.items) ? value.items : [], total: Number(value?.total || 0) })).catch((error) => notify(error.message, 'error'))
-  useEffect(() => { const timer = setTimeout(load, 180); return () => clearTimeout(timer) }, [filters.search, filters.status, filters.work_type_id])
+function JobsPage({ workTypes, notify, importBatchId, onClearImportFilter }) {
+  const [data, setData] = useState({ items: [], total: 0 }), [filters, setFilters] = useState({ search: '', status: '', work_type_id: '' }), [editor, setEditor] = useState(false), [selected, setSelected] = useState(null)
+  const load = () => api(`/api/project/jobs${qs({ ...filters, import_batch_id: importBatchId, limit: 200 })}`).then((value) => setData({ ...(value || {}), items: Array.isArray(value?.items) ? value.items : [], total: Number(value?.total || 0) })).catch((error) => notify(error.message, 'error'))
+  useEffect(() => { const timer = setTimeout(load, 180); return () => clearTimeout(timer) }, [filters.search, filters.status, filters.work_type_id, importBatchId])
   const counts = useMemo(() => ['NEW', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].map((status) => data.items.filter((item) => item.status === status).length), [data])
-  return <><PageHeader eyebrow="Операционная работа" title="Заявки" subtitle="Контролируйте сроки, статусы и назначения." actions={<><Button kind="secondary" onClick={() => setImportOpen(true)}>Импорт XLSX</Button><Button icon="plus" onClick={() => setEditor(true)}>Новая заявка</Button></>} />
+  return <><PageHeader eyebrow="Операционная работа" title="Заявки" subtitle="Контролируйте сроки, статусы и назначения." actions={<Button icon="plus" onClick={() => setEditor(true)}>Новая заявка</Button>} />
+    {importBatchId && <div className="planning-impact-warning">Показаны заявки из пакета импорта #{importBatchId}. <button className="text-action" onClick={onClearImportFilter}>Показать все заявки</button></div>}
     <div className="stats-grid"><StatCard label="Новые" value={counts[0]} /><StatCard label="В работе" value={counts[1]} tone="amber" /><StatCard label="Выполнены" value={counts[2]} tone="green" /><StatCard label="Отменены" value={counts[3]} tone="gray" /></div>
     <div className="table-card"><div className="filters embedded"><div className="search-field"><Icon name="search" /><input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Адрес" /></div><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Все статусы</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={filters.work_type_id} onChange={(event) => setFilters({ ...filters, work_type_id: event.target.value })}><option value="">Все типы работ</option>{workTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></div>
       {data.items.length ? <table><thead><tr><th>Создана</th><th>Адрес</th><th>Тип работ</th><th>Приоритет</th><th>Крайний срок</th><th>Статус</th><th /></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><b>{formatDate(item.created_at)}</b><small>{new Date(item.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</small></td><td className="address-cell">{item.address}</td><td>{workTypes.find((type) => type.id === item.work_type_id)?.name || `#${item.work_type_id}`}</td><td><Badge status={item.priority_type}>{item.priority_type === 'EMERGENCY' ? 'Аварийная' : 'Обычная'}</Badge></td><td>{formatDate(item.sla_date)}{item.time_window_start && <small>{formatTime(item.time_window_start)}–{formatTime(item.time_window_end)}</small>}</td><td><Badge status={item.status}>{statusLabels[item.status]}</Badge></td><td><button className="text-action" onClick={() => setSelected(item)}>Открыть <Icon name="chevron" /></button></td></tr>)}</tbody></table> : <Empty title="Заявок пока нет" text="Создайте первую заявку — она сразу появится в списке." action={<Button icon="plus" onClick={() => setEditor(true)}>Создать заявку</Button>} />}</div>
-    {editor && <JobForm item={typeof editor === 'object' ? editor : null} workTypes={workTypes} notify={notify} onSaved={load} onClose={() => setEditor(false)} />}{importOpen && <JobImportModal notify={notify} onSaved={load} onClose={() => setImportOpen(false)} />}{selected && <JobDetails job={selected} workTypes={workTypes} notify={notify} onClose={() => setSelected(null)} onChanged={load} onEdit={() => { setEditor(selected); setSelected(null) }} />}
+    {editor && <JobForm item={typeof editor === 'object' ? editor : null} workTypes={workTypes} notify={notify} onSaved={load} onClose={() => setEditor(false)} />}{selected && <JobDetails job={selected} workTypes={workTypes} notify={notify} onClose={() => setSelected(null)} onChanged={load} onEdit={() => { setEditor(selected); setSelected(null) }} />}
   </>
 }
 
@@ -311,9 +274,9 @@ export function PlanningPage({ projectId, ownerMode = false, ...props }) {
 }
 
 export default function DispatcherApp({ user, onLogout }) {
-  const [section, setSection] = useState('jobs'), [toast, setToast] = useState(null), [catalogs, setCatalogs] = useState({ qualifications: [], 'equipment-types': [], 'work-types': [] })
+  const [section, setSection] = useState('jobs'), [toast, setToast] = useState(null), [catalogs, setCatalogs] = useState({ qualifications: [], 'equipment-types': [], 'work-types': [] }), [importBatchId, setImportBatchId] = useState(null)
   const notify = (message, type = 'info') => setToast({ message, type, key: Date.now() })
   const loadCatalogs = () => Promise.all([api('/api/project/qualifications'), api('/api/project/equipment-types'), api('/api/project/work-types')]).then(([qualifications, equipment, workTypes]) => setCatalogs({ qualifications: Array.isArray(qualifications) ? qualifications : [], 'equipment-types': Array.isArray(equipment) ? equipment : [], 'work-types': Array.isArray(workTypes) ? workTypes : [] })).catch((error) => notify(error.message, 'error'))
   useEffect(() => { void loadCatalogs() }, [])
-  return <Shell user={user} roleLabel="Диспетчер" contextLabel="Проект" contextValue={`Проект #${user.project_id}`} nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'jobs' && <JobsPage workTypes={catalogs['work-types']} notify={notify} />}{section === 'imports' && <JobImports projectId={user.project_id} notify={notify} onOpenJobs={() => setSection('jobs')} />}{section === 'engineers' && <EngineersPage qualifications={catalogs.qualifications} notify={notify} />}{section === 'catalogs' && <CatalogsPage catalogs={catalogs} reload={loadCatalogs} notify={notify} />}{section === 'planning' && <PlanningPage user={user} projectId={user.project_id} notify={notify} onNavigate={setSection} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
+  return <Shell user={user} roleLabel="Диспетчер" contextLabel="Проект" contextValue={`Проект #${user.project_id}`} nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'jobs' && <JobsPage workTypes={catalogs['work-types']} notify={notify} importBatchId={importBatchId} onClearImportFilter={() => setImportBatchId(null)} />}{section === 'imports' && <JobImports projectId={user.project_id} notify={notify} onOpenJobs={(batchId) => { setImportBatchId(batchId); setSection('jobs') }} />}{section === 'engineers' && <EngineersPage qualifications={catalogs.qualifications} notify={notify} />}{section === 'catalogs' && <CatalogsPage catalogs={catalogs} reload={loadCatalogs} notify={notify} />}{section === 'planning' && <PlanningPage user={user} projectId={user.project_id} notify={notify} onNavigate={setSection} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
 }

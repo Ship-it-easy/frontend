@@ -37,6 +37,8 @@ npm install
 npm run dev
 ```
 
-Backend должен быть доступен на `http://localhost:8000`. При необходимости URL меняется через `VITE_API_URL`.
+В development backend по умолчанию используется на порту `8000` того же
+hostname, на котором открыт Vite. В production запросы по умолчанию same-origin;
+для отдельного API-домена задайте `VITE_API_URL` во время сборки.
 
 # frontend
