@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
 import PlanningConfig from './PlanningConfig.jsx'
 import { matchesPlanningFilters, readinessTarget, selectPlanningDate } from './planningView.js'
 import { Badge, Button, Empty, PageHeader, formatDate, formatDateTime, formatTime } from './ui.jsx'
 
+const RoutesMap = React.lazy(() => import('./RoutesMap.jsx'))
 const safeArray = (value) => Array.isArray(value) ? value : []
 const activeStates = new Set(['PENDING', 'RUNNING'])
 const statusLabels = { NEW: 'Новая', IN_PROGRESS: 'В работе', COMPLETED: 'Выполнена', CANCELLED: 'Отменена' }
@@ -231,7 +232,7 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
       <ResultContext version={board?.plan_version} timeZone={board?.timezone} />
       {!board?.plan_version ? <Empty title="План ещё не рассчитан" text={board?.readiness?.ready === false ? 'Подготовьте обязательные данные, затем запустите расчёт.' : 'Нажмите «Рассчитать маршруты», чтобы опубликовать первый план.'} action={board?.readiness?.ready !== false && <Button onClick={calculate}>Рассчитать маршруты</Button>} /> : <>
         <section className="board-filters"><label className="board-search"><span>⌕</span><input aria-label="Поиск по адресу и типу работ" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Адрес или тип работ" /></label><select aria-label="Приоритет" value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}><option value="">Обычная / Авария</option><option value="NORMAL">Обычная</option><option value="EMERGENCY">Авария</option></select><select aria-label="Статус заявки" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Все статусы</option>{safeArray(day?.available_filters?.statuses).map((status) => <option key={status} value={status}>{statusLabels[status] || status}</option>)}</select><select aria-label="Результат" value={filters.outcome} onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}><option value="ALL">Все</option><option value="ASSIGNED">Назначенные</option><option value="UNASSIGNED_TODAY">Неназначенные</option></select>{filtered && <span className="shown-count">Показано {visibleCount} из {allCards.length}</span>}</section>
-        {!day ? <div className="board-loading"><span className="spinner" /> Загружаем день…</div> : !day.result_available ? <Empty title="Для этой даты нет результата расчёта" text="Дата не рассчитывалась в актуальной версии плана." /> : <div className="route-board"><div className="route-board-scroll">{safeArray(day.engineer_columns).map((column) => <EngineerColumn key={column.engineer_id} column={column} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} />)}<UnassignedColumn value={day.unassigned} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} /></div></div>}
+        {!day ? <div className="board-loading"><span className="spinner" /> Загружаем день…</div> : !day.result_available ? <Empty title="Для этой даты нет результата расчёта" text="Дата не рассчитывалась в актуальной версии плана." /> : <><Suspense fallback={<div className="map-loading"><span className="spinner" /> Загружаем карту…</div>}><RoutesMap day={day} planningDate={selectedDate} timeZone={board?.timezone} /></Suspense><div className="route-board"><div className="route-board-scroll">{safeArray(day.engineer_columns).map((column) => <EngineerColumn key={column.engineer_id} column={column} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} />)}<UnassignedColumn value={day.unassigned} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} /></div></div></>}
       </>}
     </>}
     {drawer && <ExplanationDrawer value={drawer} loading={drawerLoading} updated={drawerUpdated} onClose={() => { setDrawer(null); setDrawerUpdated(false) }} returnFocus={returnFocus} timeZone={board?.timezone} />}
