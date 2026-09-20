@@ -1,271 +1,239 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
-import RoutesMap from './RoutesMap.jsx'
-import { Badge, Button, Empty, Field, Modal, PageHeader, formatDate, formatDateTime, formatTime } from './ui.jsx'
+import PlanningConfig from './PlanningConfig.jsx'
+import { matchesPlanningFilters, readinessTarget, selectPlanningDate } from './planningView.js'
+import { Badge, Button, Empty, PageHeader, formatDate, formatDateTime, formatTime } from './ui.jsx'
 
-const activeEventStates = new Set(['PENDING', 'RUNNING'])
-const eventStateLabels = { PENDING: 'Ожидает', RUNNING: 'Выполняется', PUBLISHED: 'Опубликован', FAILED: 'Ошибка' }
-const triggerLabels = { JOB_CREATED: 'Новая заявка', JOB_CANCELLED: 'Отмена заявки', ENGINEER_AVAILABILITY_LOST: 'Инженер недоступен', ENGINEER_AVAILABILITY_RESTORED: 'Доступность инженера восстановлена', COALESCED: 'Несколько изменений', MANUAL: 'Ручной запуск', NIGHTLY: 'Ночной запуск', RECOVERY: 'Восстановление' }
-const changeLabels = { ASSIGNED: 'Назначена', CHANGED: 'Перепланирована', DISPLACED: 'Вытеснена', CANCELLED: 'Отменена' }
-const changeReasonLabels = { NEW_ASSIGNMENT: 'Новое назначение', REPLANNED: 'Маршрут изменён', JOB_CANCELLED: 'Заявка отменена', ENGINEER_UNAVAILABLE: 'Инженер недоступен', CANCELLED_EN_ROUTE_ASSUMPTION: 'Маршрут продолжен от адреса отменённой заявки', DISPLACED_TO_FUTURE: 'Перенесена на будущую дату', NOT_ASSIGNED_IN_NEW_HORIZON: 'Не назначена в новой версии' }
-const reasonLabels = {
-  NO_AVAILABLE_ENGINEER: 'На дату нет доступного инженера',
-  NO_COMPATIBLE_ENGINEER: 'Нет совместимого инженера',
-  NOT_SELECTED_BY_OPTIMIZER: 'Допустима, но не выбрана оптимизатором',
-  NO_COMPATIBLE_ENGINEER_IN_HORIZON: 'Нет совместимого инженера в горизонте',
-  NO_SHIFT_IN_HORIZON: 'Нет смен в горизонте',
-  DURATION_EXCEEDS_ALL_SHIFTS: 'Работа не помещается ни в одну смену',
-  EQUIPMENT_UNAVAILABLE_IN_HORIZON: 'Оборудование недоступно',
-  INVALID_TIME_WINDOW_FOR_HORIZON: 'Временное окно недоступно в горизонте',
-  DAILY_TIME_WINDOW_CONFLICT: 'Временное окно не помещается в смену',
-  NOT_ASSIGNED_WITHIN_HORIZON: 'Не назначена в пределах горизонта',
-  SLA_OUTSIDE_MAXIMUM_HORIZON: 'SLA находится за пределами максимального горизонта',
-  ENGINEER_UNAVAILABLE: 'Инженер недоступен',
-  JOB_CANCELLED: 'Заявка отменена',
-  DISTANCE_DATA_NOT_READY: 'Данные о расстояниях не готовы',
-  TRAVEL_PROVIDER_UNAVAILABLE: 'Дорожный сервис недоступен',
-  INVALID_PENALTY_BANDS: 'Некорректны диапазоны приоритетов SLA',
-  OBJECTIVE_RANGE_OVERFLOW: 'Целевая функция не помещается в допустимый диапазон',
-  FAILED_VALIDATION: 'Результат не прошёл проверку ограничений',
-  STALE_SNAPSHOT: 'Исходные данные изменились во время расчёта',
-}
-const eventErrorText = (event) => reasonLabels[event?.error_code] || event?.error_message || event?.error_code || 'Неизвестная ошибка'
-const planningImpactText = 'Изменение параметров не перестраивает уже опубликованный план. Новые настройки применятся при следующем ручном, ночном или автоматическом расчёте.'
 const safeArray = (value) => Array.isArray(value) ? value : []
+const activeStates = new Set(['PENDING', 'RUNNING'])
+const statusLabels = { NEW: 'Новая', IN_PROGRESS: 'В работе', COMPLETED: 'Выполнена', CANCELLED: 'Отменена' }
+const triggerLabels = { MANUAL: 'Вручную', NIGHTLY: 'Ночью', JOB_CREATED: 'Новая заявка', IMPORT: 'Импорт заявок', JOB_CANCELLED: 'Отмена заявки', ENGINEER_AVAILABILITY_LOST: 'Изменение доступности инженера', ENGINEER_AVAILABILITY_RESTORED: 'Изменение доступности инженера', COALESCED: 'Несколько изменений' }
+const resultLabels = { SUCCESS: 'Успешный результат', PARTIAL: 'Частичный результат', FEASIBLE_TIME_LIMIT: 'Допустимый план по лимиту времени' }
 
-function PlanningConfig({ notify }) {
-  const [config, setConfig] = useState(null)
+function emitPlanningEvent(name, detail = {}) {
+  window.dispatchEvent(new CustomEvent('route-app:planning-event', { detail: { name, ...detail } }))
+}
+function dayDate(value) { return new Date(`${value}T00:00:00`) }
+function weekday(value) { return new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(dayDate(value)).replace('.', '') }
+function dayMonth(value) { return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' }).format(dayDate(value)).replace('.', '') }
+function pluralJobs(value) { return `${value} ${value % 10 === 1 && value % 100 !== 11 ? 'заявка' : value % 10 >= 2 && value % 10 <= 4 && (value % 100 < 10 || value % 100 >= 20) ? 'заявки' : 'заявок'}` }
+
+function Readiness({ value, onNavigate }) {
   const [open, setOpen] = useState(false)
-
-  useEffect(() => { api('/api/project/planning-config').then(setConfig).catch(() => setConfig(null)) }, [])
-
-  async function save(event) {
-    event.preventDefault()
-    if (!window.confirm(`${planningImpactText}\n\nСохранить новую версию настроек?`)) return
-    const form = new FormData(event.currentTarget)
-    const body = {}
-    numericFields.forEach(([name]) => { body[name] = Number(form.get(name)) })
-    body.nightly_planning_enabled = form.get('nightly_planning_enabled') === 'on'
-    body.nightly_planning_time = form.get('nightly_planning_time')
-    body.travel_provider = form.get('travel_provider')
-    try {
-      setConfig(await api('/api/project/planning-config', { method: 'PATCH', body: JSON.stringify(body) }))
-      notify('Настройки расчёта сохранены')
-      setOpen(false)
-    } catch (error) { notify(error.message, 'error') }
-  }
-
-  if (!config) return null
-  return <>
-    <Button kind="secondary" icon="settings" onClick={() => setOpen(true)}>Параметры</Button>
-    {open && <Modal wide title="Параметры динамического планирования" subtitle={`Версия конфигурации ${config.version}`} onClose={() => setOpen(false)}>
-      <form className="stack-form" onSubmit={save}>
-        <div className="planning-impact-warning">{planningImpactText}</div>
-        <div className="form-grid">{numericFields.map(([name, label, min, fallback]) => <Field label={label} key={name}><input required name={name} type="number" min={min} defaultValue={config[name] ?? fallback} /></Field>)}</div>
-        <Field label="Провайдер дорожной матрицы"><select name="travel_provider" defaultValue={config.travel_provider}><option value="VALHALLA_LOCAL">Локальная Valhalla</option></select></Field>
-        <label className="switch-row"><span><b>Ночной пересчёт</b><small>Полностью перестраивает и автоматически публикует план один раз в сутки.</small></span><input name="nightly_planning_enabled" type="checkbox" defaultChecked={config.nightly_planning_enabled} /></label>
-        <Field label="Время ночного пересчёта"><input required name="nightly_planning_time" type="time" defaultValue={formatTime(config.nightly_planning_time)} /></Field>
-        <div className="form-actions"><Button type="button" kind="ghost" onClick={() => setOpen(false)}>Отмена</Button><Button>Сохранить новую версию</Button></div>
-      </form>
-    </Modal>}
-  </>
+  if (!value) return <div className="board-readiness-wrap"><button disabled className="board-readiness pending"><span>…</span>Проверяем данные</button></div>
+  const ready = value?.ready !== false
+  return <div className="board-readiness-wrap">
+    <button className={`board-readiness ${ready ? 'ready' : 'not-ready'}`} aria-expanded={open} onClick={() => setOpen(!open)}><span>{ready ? '✓' : '!'}</span>{ready ? 'Данные готовы' : 'Данные не готовы'}</button>
+    {open && <div className="readiness-popover">{ready ? <p>Все обязательные данные доступны для расчёта.</p> : <><b>Что нужно исправить</b>{safeArray(value?.problems).map((item) => <button type="button" key={item.code} onClick={() => { setOpen(false); const settings = item.section === 'parameters' ? document.getElementById('planning-parameters') : null; if (settings) settings.click(); else onNavigate?.(item.section) }}>{item.message}<span>→</span></button>)}</>}</div>}
+  </div>
 }
 
-const numericFields = [
-  ['candidate_solver_time_limit_sec', 'Один кандидат, сек', 1],
-  ['single_cascade_time_limit_sec', 'Один каскад, сек', 1],
-  ['event_time_limit_sec', 'Одно событие, сек', 1],
-  ['event_coalesce_window_sec', 'Окно объединения заявок, сек', 0],
-  ['event_coalesce_max_wait_sec', 'Максимальное ожидание объединения, сек', 1],
-  ['max_parallel_candidate_models', 'Параллельных кандидатов', 1],
-  ['solver_time_limit_sec', 'Solver на один день, сек', 1],
-  ['batch_total_time_limit_sec', 'Общий лимит каскада, сек', 1],
-  ['max_jobs_per_run', 'Заявок в дневном расчёте', 1],
-  ['max_jobs_per_batch', 'Заявок в событии', 1],
-  ['distance_unit_meters', 'Единица пробега, метры', 1],
-  ['time_unit_seconds', 'Единица времени пути, секунды', 1],
-  ['travel_cache_ttl_days', 'TTL дорожной матрицы, дней', 0, 7],
-  ['future_opportunity_critical', 'Бонус: одна возможность', 0],
-  ['future_opportunity_high', 'Бонус: 2–3 возможности', 0],
-  ['future_opportunity_limited', 'Бонус: 4–7 возможностей', 0],
-  ['travel_cost_per_minute', 'Цена минуты пути', 0],
-  ['solver_seed', 'Seed оптимизатора', 0],
-  ['sla_overdue_per_day', 'Штраф за день просрочки', 0],
-  ['sla_today', 'Штраф SLA сегодня', 0],
-  ['sla_tomorrow', 'Штраф SLA завтра', 0],
-  ['sla_2_3_days', 'Штраф SLA через 2–3 дня', 0],
-  ['sla_later', 'Штраф позднего SLA', 0],
-  ['sla_overdue_base', 'Базовый штраф просрочки', 0],
-  ['skill_one_engineer', 'Штраф: навык только у одного', 0],
-  ['skill_two_engineers', 'Штраф: навык у двух', 0],
-  ['equipment_one_unit', 'Штраф: одна единица оборудования', 0],
-  ['equipment_two_units', 'Штраф: две единицы оборудования', 0],
-  ['window_30', 'Штраф окна 30 минут', 0],
-  ['window_60', 'Штраф окна 60 минут', 0],
-  ['window_120', 'Штраф окна 120 минут', 0],
-]
+function RunBanner({ run, hasPlan, onRetry, timeZone }) {
+  if (!run) return null
+  if (run.state === 'FAILED') return <section className="board-alert error"><div><b>Расчёт завершился ошибкой</b><span>{run.error_message || 'Не удалось завершить расчёт'} · {formatDateTime(run.finished_at || run.started_at, timeZone)}</span></div><Button kind="secondary" onClick={onRetry}>Повторить</Button></section>
+  if (!activeStates.has(run.state)) return null
+  return <section className="board-run-progress"><div><span className="spinner" /><div><b>{run.phase || 'Подготовка данных'}</b><span>Запущено {formatDateTime(run.started_at, timeZone)}{hasPlan ? ' · Показан предыдущий план до завершения расчёта' : ''}</span></div></div><i /></section>
+}
 
-function EventProgress({ event }) {
-  if (!event) return null
-  const progress = event.progress || {}
-  const completed = Number(progress.candidate_evaluations_completed || 0)
-  const total = Number(progress.candidate_evaluations_total || 0)
-  const percent = total ? Math.round((completed / total) * 100) : event.state === 'PUBLISHED' ? 100 : 0
-  return <section className={`planning-event planning-event-${String(event.state).toLowerCase()}`}>
-    <div className="planning-event-head"><div><span className="eyebrow">Событие планирования #{event.id}</span><h3>{triggerLabels[event.event_type] || event.event_type}</h3></div><Badge status={event.state}>{eventStateLabels[event.state] || event.state}</Badge></div>
-    <div className="progress-track"><i style={{ width: `${percent}%` }} /></div>
-    <div className="planning-event-meta"><span>Кандидаты: {completed}/{total || '—'}</span><span>Ожидают обработки: {progress.queued_events ?? 0}</span>{progress.current_candidate_engineer_id && <span>Инженер-кандидат #{progress.current_candidate_engineer_id}</span>}{progress.current_day?.planning_date && <span>Дата: {formatDate(progress.current_day.planning_date)}</span>}</div>
-    {(event.error_message || event.error_code) && <div className="stale-warning">{eventErrorText(event)}</div>}
+function DateStrip({ days, selected, today, onSelect }) {
+  return <div className="planning-date-strip" role="tablist" aria-label="Дни планирования">{safeArray(days).map((item) => <button key={item.date} role="tab" aria-selected={selected === item.date} className={selected === item.date ? 'selected' : ''} onClick={() => onSelect(item.date)}>
+    <span>{weekday(item.date)}{item.date === today && <em>Сегодня</em>}</span><strong>{dayMonth(item.date)}</strong><small><b>{item.assigned_count}</b> назначено · <b>{item.unassigned_count}</b> не назначено</small>{item.cancelled_count > 0 && <small className="cancel-count">{item.cancelled_count} отменено</small>}
+  </button>)}</div>
+}
+
+function ResultContext({ version, timeZone }) {
+  if (!version) return null
+  return <section className="plan-context"><div><span>Последняя публикация</span><b>{formatDateTime(version.published_at, timeZone)}</b></div><div><span>Причина запуска</span><b>{triggerLabels[version.trigger] || version.trigger}</b></div>{version.initiator && <div><span>Инициатор</span><b>{version.initiator}</b></div>}<div><span>Версия плана</span><b>Версия {version.number}</b></div><div><span>Статус</span><b>{resultLabels[version.status] || version.status}</b></div></section>
+}
+
+function JobCard({ job, onOpen, cancelled = false, timeZone }) {
+  const action = job.outcome === 'UNASSIGNED_TODAY' ? 'Почему не назначена' : cancelled ? 'Подробнее' : 'Почему назначена'
+  return <button type="button" className={`route-job-card ${cancelled ? 'cancelled' : ''} ${job.overdue ? 'overdue' : ''}`} onClick={(event) => onOpen(job, event.currentTarget)}>
+    <header>{job.route_position && <span className="route-position">{job.route_position}</span>}<Badge status={job.status}>{statusLabels[job.status] || job.status}</Badge>{job.priority_type === 'EMERGENCY' && <span className="emergency-label">Авария</span>}</header>
+    {!cancelled && job.planned_start && <div className="job-time">{formatTime(job.planned_start, timeZone)}–{formatTime(job.planned_end, timeZone)}</div>}
+    <div className="job-address" title={job.address}>{job.address || 'Адрес не сохранён'}</div>
+    <div className="job-type">{job.work_type || 'Тип работ не указан'} · {job.duration_min || '—'} мин</div>
+    <div className="job-sla"><span>SLA {formatDate(job.sla_date)}</span>{job.overdue && <b>Просрочена</b>}</div>
+    {!!safeArray(job.required_equipment).length && <div className="job-equipment">{job.required_equipment.map((item) => item.name).join(', ')}</div>}
+    {job.later_assignment_date && <div className="moved-label">Перенесена на {formatDate(job.later_assignment_date)}</div>}
+    {job.final_horizon_outcome && <div className="horizon-label">Не назначена в горизонте</div>}
+    {cancelled && job.cancelled_at && <div className="cancelled-meta">Отменена {formatDateTime(job.cancelled_at, timeZone)}{job.cancelled_by ? ` · ${job.cancelled_by}` : ''}</div>}
+    <p className="job-reason">{job.primary_reason?.text || 'Подробная причина недоступна'}</p>
+    <span className="job-action">{action} <i>→</i></span>
+  </button>
+}
+
+function TravelLeg({ job }) {
+  const travel = Number(job.travel_from_previous_min) > 0 ? Number(job.travel_from_previous_min) : null
+  const meters = Number(job.distance_from_previous_meters) > 0 ? Number(job.distance_from_previous_meters) : null
+  if (travel == null && meters == null) return null
+  const distance = meters == null ? null : meters >= 1000 ? `${(meters / 1000).toFixed(1)} км` : `${meters} м`
+  return <div className="travel-leg"><i /><span>{travel != null ? `${travel} мин` : ''}{distance ? `${travel != null ? ' · ' : ''}${distance}` : ''}</span></div>
+}
+
+function EngineerColumn({ column, filterJob, onOpen, timeZone }) {
+  const jobs = safeArray(column.jobs).filter(filterJob)
+  const cancelled = safeArray(column.cancelled_jobs).filter(filterJob)
+  const hours = column.shift_start ? `${formatTime(column.shift_start)}–${formatTime(column.shift_end)}` : 'Смена не задана'
+  return <section className="route-column" aria-labelledby={`engineer-${column.engineer_id}`}>
+    <header className="route-column-head"><div><h2 id={`engineer-${column.engineer_id}`} title={column.name}>{column.name}</h2>{column.unavailable && <Badge status="CANCELLED">Недоступен</Badge>}</div><span>{hours}</span><small>{pluralJobs(column.active_count)} · {column.route_duration_min || 0} мин{column.distance_meters ? ` · ${(column.distance_meters / 1000).toFixed(1)} км` : ''}</small></header>
+    <div className="route-column-body">{jobs.length ? jobs.map((job, index) => <React.Fragment key={job.job_id}>{index > 0 && <TravelLeg job={job} />}<JobCard job={job} onOpen={onOpen} timeZone={timeZone} /></React.Fragment>) : <div className="column-empty">Нет назначенных заявок</div>}{cancelled.length > 0 && <div className="cancelled-group"><h3>Отменённые</h3>{cancelled.map((job) => <JobCard key={job.job_id} job={job} onOpen={onOpen} cancelled timeZone={timeZone} />)}</div>}</div>
   </section>
 }
 
-function assignmentText(value) {
-  if (!value) return 'нет назначения'
-  return `${formatDate(value.planning_date)}, инженер #${value.engineer_id}, позиция ${value.sequence}, ${formatTime(value.planned_start)}–${formatTime(value.planned_finish)}`
+function UnassignedColumn({ value, filterJob, onOpen, timeZone }) {
+  const moved = safeArray(value?.moved).filter(filterJob)
+  const horizon = safeArray(value?.horizon).filter(filterJob)
+  return <section className="route-column unassigned-column" aria-labelledby="unassigned-title"><header className="route-column-head"><div><h2 id="unassigned-title">Неназначенные заявки</h2></div><span>Результат выбранного дня</span><small>{pluralJobs(moved.length + horizon.length)}</small></header><div className="route-column-body">
+    <div className="unassigned-group"><h3>Перенесены <span>{moved.length}</span></h3>{moved.length ? moved.map((job) => <JobCard key={job.job_id} job={job} onOpen={onOpen} timeZone={timeZone} />) : <p>Нет перенесённых заявок</p>}</div>
+    <div className="unassigned-group"><h3>Не назначены в горизонте <span>{horizon.length}</span></h3>{horizon.length ? horizon.map((job) => <JobCard key={job.job_id} job={job} onOpen={onOpen} timeZone={timeZone} />) : <p>Нет неназначенных заявок</p>}</div>
+  </div></section>
 }
 
-function changedAssignmentFields(before, after) {
-  if (!before || !after) return []
-  const fields = [
-    ['planning_date', 'Дата', formatDate],
-    ['engineer_id', 'Инженер', (value) => `#${value}`],
-    ['sequence', 'Порядок', (value) => `№${value}`],
-    ['planned_start', 'Начало', formatTime],
-    ['planned_finish', 'Окончание', formatTime],
-  ]
-  return fields
-    .filter(([key]) => before[key] !== after[key])
-    .map(([key, label, format]) => `${label}: ${format(before[key])} → ${format(after[key])}`)
+function ExplanationDrawer({ value, loading, updated, onClose, returnFocus, timeZone }) {
+  const closeRef = useRef(null)
+  const drawerRef = useRef(null)
+  useEffect(() => {
+    closeRef.current?.focus()
+    const keydown = (event) => {
+      if (event.key === 'Escape') { onClose(); return }
+      if (event.key !== 'Tab') return
+      const focusable = [...(drawerRef.current?.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') || [])].filter((item) => !item.disabled)
+      if (!focusable.length) return
+      const first = focusable[0], last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    }
+    window.addEventListener('keydown', keydown)
+    return () => { window.removeEventListener('keydown', keydown); returnFocus?.focus() }
+  }, [onClose, returnFocus])
+  const job = value?.job
+  const title = job?.outcome === 'UNASSIGNED_TODAY' ? 'Почему не назначена' : job?.outcome === 'CANCELLED' ? 'Сведения об отмене' : 'Почему назначена'
+  return <div className="explanation-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside ref={drawerRef} className="explanation-drawer" role="dialog" aria-modal="true" aria-labelledby="explanation-title"><header><div><span>Объяснение решения</span><h2 id="explanation-title">{title}</h2></div><button ref={closeRef} aria-label="Закрыть" onClick={onClose}>×</button></header>{updated && <div className="drawer-updated">План обновлён</div>}{loading ? <div className="drawer-loading">Загружаем сохранённое объяснение…</div> : value && job ? <div className="drawer-content">
+    {job.current_data_changed && <div className="drawer-updated">Текущие данные заявки отличаются от данных, использованных в этом расчёте.</div>}
+    <section className="drawer-job"><Badge status={job.status}>{statusLabels[job.status] || job.status}</Badge><h3>{job.address || 'Адрес не сохранён'}</h3><p>{job.work_type || 'Тип работ не сохранён'} · {job.duration_min ?? '—'} мин · SLA {formatDate(job.sla_date)}</p></section>
+    {value.assignment && <section><h3>Назначение</h3><dl><div><dt>Инженер</dt><dd>{value.assignment.engineer_name}</dd></div><div><dt>Дата и позиция</dt><dd>{formatDate(value.planning_date)} · №{value.assignment.position}</dd></div><div><dt>Плановое время</dt><dd>{formatTime(value.assignment.planned_start, timeZone)}–{formatTime(value.assignment.planned_end, timeZone)}</dd></div></dl></section>}
+    {!!safeArray(value.eligibility).length && <section><h3>Допустимость</h3><ul className="check-list">{value.eligibility.map((item) => <li key={item.code}><span>✓</span>{item.text}</li>)}</ul></section>}
+    {!!safeArray(value.priority_factors).length && <section><h3>Факторы приоритета</h3>{value.priority_factors.map((item) => <p className="explanation-factor" key={item.code}>{item.text}</p>)}</section>}
+    {(Number(value.route_factors?.travel_from_previous_min) > 0 || Number(value.route_factors?.distance_from_previous_meters) > 0) && <section><h3>Маршрутные факторы</h3><p className="explanation-factor">{Number(value.route_factors?.travel_from_previous_min) > 0 ? `Добавлено ${value.route_factors.travel_from_previous_min} мин пути` : 'Сохранено расстояние от предыдущей точки'}{Number(value.route_factors?.distance_from_previous_meters) > 0 ? ` · ${value.route_factors.distance_from_previous_meters} м` : ''}</p></section>}
+    <section><h3>Результат оптимизации</h3>{safeArray(value.outcome_reasons).map((item) => <p className="outcome-reason" key={item.code}>{item.text}</p>)}</section>
+    <details className="technical-details"><summary>Технические компоненты objective</summary><dl><div><dt>Допустимых инженеров</dt><dd>{value.eligible_engineers_count ?? '—'}</dd></div><div><dt>Статус solver</dt><dd>{value.technical?.solver_status || '—'}</dd></div><div><dt>Objective</dt><dd>{value.technical?.objective ?? '—'}</dd></div><div><dt>Drop cost</dt><dd>{value.technical?.drop_cost ?? '—'}</dd></div><div><dt>Travel cost</dt><dd>{value.technical?.travel_cost ?? '—'}</dd></div>{Object.entries(value.technical?.objective_components || {}).map(([key, component]) => <div key={key}><dt>{key}</dt><dd>{String(component ?? '—')}</dd></div>)}</dl></details>
+  </div> : <Empty title="Объяснение недоступно" text="Для старой версии плана не сохранились необходимые данные." />}</aside></div>
 }
 
-function VersionDay({ date, engineers, projectToday }) {
-  const mapResult = useMemo(() => ({
-    routes: [...engineers.entries()].map(([engineerId, assignments]) => {
-      const first = assignments[0] || {}
-      return {
-        engineer_id: engineerId,
-        engineer_name: first.engineer_name || `Инженер #${engineerId}`,
-        transport_type: first.transport_type,
-        start_coordinate: first.start_latitude != null && first.start_longitude != null
-          ? { latitude: first.start_latitude, longitude: first.start_longitude }
-          : null,
-        jobs: assignments.map((item) => ({
-          job_id: item.job_id,
-          address: item.address,
-          planned_start: item.planned_start,
-          coordinate: item.latitude != null && item.longitude != null
-            ? { latitude: item.latitude, longitude: item.longitude }
-            : null,
-        })),
-      }
-    }),
-  }), [engineers])
-
-  return <section className="version-day">
-    <h3>{formatDate(date)}{date === projectToday && <small>Сегодня</small>}</h3>
-    <div className="routes-summary">{[...engineers.entries()].map(([engineerId, assignments]) => <article key={engineerId}>
-      <header><b>{assignments[0]?.engineer_name || `Инженер #${engineerId}`}</b><span>{assignments.length} заявок · {(assignments.reduce((sum, item) => sum + Number(item.distance_from_previous_meters || 0), 0) / 1000).toFixed(1)} км</span></header>
-      {assignments.map((item) => <div key={item.id}><span className="sequence">{item.sequence}</span><b>#{item.job_id} · {item.address}{item.priority_type === 'EMERGENCY' ? ' · Аварийная' : ''}</b><small>{formatTime(item.planned_start)}–{formatTime(item.planned_finish)}</small></div>)}
-    </article>)}</div>
-    <RoutesMap result={mapResult} />
-  </section>
-}
-
-export default function DynamicPlanningPage({ projectId, notify, ownerMode = false }) {
-  const [planningContext, setPlanningContext] = useState(null)
-  const [readiness, setReadiness] = useState(null)
-  const [versions, setVersions] = useState([])
-  const [plan, setPlan] = useState({ version: null, assignments: [], changes: [] })
-  const [selectedVersionId, setSelectedVersionId] = useState(null)
-  const [event, setEvent] = useState(null)
-  const [view, setView] = useState('routes')
-  const [busy, setBusy] = useState(false)
+export default function DynamicPlanningPage({ projectId, notify, ownerMode = false, onNavigate }) {
   const base = ownerMode ? `/api/projects/${projectId}/planning` : '/api/project/planning'
-  const projectToday = planningContext?.planning_date || null
+  const [board, setBoard] = useState(null)
+  const [day, setDay] = useState(null)
+  const [selectedDate, setSelectedDate] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [filters, setFilters] = useState({ search: '', priority: '', status: '', outcome: 'ALL' })
+  const [drawer, setDrawer] = useState(null)
+  const [drawerLoading, setDrawerLoading] = useState(false)
+  const [drawerUpdated, setDrawerUpdated] = useState(false)
+  const [returnFocus, setReturnFocus] = useState(null)
 
-  const loadVersions = async (quiet = false) => {
+  async function loadDay(date, versionId, quiet = false) {
     try {
-      const value = await api(`${base}/versions?limit=50`)
-      setVersions(safeArray(value?.items))
-    } catch (error) { if (!quiet) notify(error.message, 'error') }
-  }
-  const loadCurrent = async (quiet = false) => {
-    try {
-      const value = await api(`${base}/current`)
-      if (selectedVersionId === null) setPlan(value || { version: null, assignments: [], changes: [] })
+      const value = await api(`${base}/board/${date}${versionId ? `?plan_version_id=${versionId}` : ''}`)
+      setDay(value)
       return value
-    } catch (error) { if (!quiet) notify(error.message, 'error'); return null }
+    } catch (error) {
+      if (error.code === 'VERSION_CHANGED') {
+        const value = await loadBoard(true, date)
+        if (value) emitPlanningEvent('planning_version_changed', { plan_version_id: value.plan_version?.id })
+        return value
+      }
+      if (!quiet) notify(error.message, 'error')
+      return null
+    }
   }
-  const openVersion = async (id) => {
-    try { setPlan(await api(`${base}/versions/${id}`)); setSelectedVersionId(id) }
-    catch (error) { notify(error.message, 'error') }
-  }
-  const openCurrent = async () => { setSelectedVersionId(null); const value = await api(`${base}/current`); setPlan(value || { version: null, assignments: [], changes: [] }) }
-  const loadEvent = async (id, quiet = false) => {
-    try { const value = await api(`${base}/events/${id}`); setEvent(value); return value }
-    catch (error) { if (!quiet) notify(error.message, 'error'); return null }
+
+  async function loadBoard(quiet = false, preferredDate = selectedDate) {
+    try {
+      const value = await api(`${base}/board?days=7`)
+      const nextDate = selectPlanningDate(value.days, preferredDate, value.project_date)
+      const previousVersion = board?.plan_version?.id
+      setBoard(value)
+      if (!quiet) emitPlanningEvent('planning_board_opened', { project_id: projectId, plan_version_id: value.plan_version?.id })
+      setSelectedDate(nextDate)
+      const nextDay = nextDate === value.project_date ? value.selected_day : await loadDay(nextDate, value.plan_version?.id, true)
+      if (nextDate === value.project_date) setDay(nextDay)
+      if (drawer && previousVersion && value.plan_version?.id !== previousVersion) {
+        setDrawerUpdated(true)
+        void openExplanation(drawer.job, returnFocus, nextDay?.day_result_id)
+      }
+      return value
+    } catch (error) {
+      if (!quiet) notify(error.message, 'error')
+      return null
+    } finally { if (!quiet) setLoading(false) }
   }
 
   useEffect(() => {
-    setPlan({ version: null, assignments: [], changes: [] }); setSelectedVersionId(null); setEvent(null); setPlanningContext(null); setReadiness(null)
-    void loadVersions(); void loadCurrent()
-    api(`/api/projects/${projectId}/planning/context`).then((value) => {
-      setPlanningContext(value)
-      if (ownerMode) setReadiness({ ready: true, problems: [] })
-      else api(`/api/project/planning/readiness?planning_date=${value.planning_date}`).then(setReadiness).catch((error) => notify(error.message, 'error'))
-    }).catch((error) => notify(error.message, 'error'))
-    const storedEventId = window.sessionStorage.getItem('route-app:last-planning-event')
-    if (storedEventId) void loadEvent(storedEventId, true).then((value) => { if (!value) window.sessionStorage.removeItem('route-app:last-planning-event') })
+    setBoard(null); setDay(null); setSelectedDate(''); setLoading(true); setDrawer(null)
+    void loadBoard(false, '')
   }, [projectId, ownerMode])
 
   useEffect(() => {
-    const timer = window.setInterval(() => { void loadVersions(true); void loadCurrent(true) }, 15000)
+    const active = activeStates.has(board?.active_run?.state)
+    const timer = window.setInterval(() => void loadBoard(true), active ? 2000 : 15000)
     return () => window.clearInterval(timer)
-  }, [base, selectedVersionId])
+  }, [base, selectedDate, board?.active_run?.state, board?.plan_version?.id])
 
-  useEffect(() => {
-    if (!event || !activeEventStates.has(event.state)) return undefined
-    const timer = window.setInterval(async () => {
-      const value = await loadEvent(event.id, true)
-      if (value && !activeEventStates.has(value.state)) {
-        window.clearInterval(timer); void loadVersions(true); setSelectedVersionId(null)
-        const current = await api(`${base}/current`); setPlan(current || { version: null, assignments: [], changes: [] })
-        notify(value.state === 'PUBLISHED' ? `Опубликована новая версия плана #${current?.version?.version_number || ''}` : `Планирование завершилось ошибкой: ${eventErrorText(value)}`, value.state === 'FAILED' ? 'error' : 'info')
-      }
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [event?.id, event?.state, base])
+  async function selectDate(value) {
+    setSelectedDate(value)
+    if (value === board?.project_date) setDay(board.selected_day)
+    else { setDay(null); await loadDay(value, board?.plan_version?.id) }
+    emitPlanningEvent('planning_day_selected', { project_id: projectId, planning_date: value, plan_version_id: board?.plan_version?.id })
+  }
 
   async function calculate() {
     setBusy(true)
     try {
       const started = await api(`${base}/events/manual`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() } })
-      window.sessionStorage.setItem('route-app:last-planning-event', String(started.planning_event_id))
-      await loadEvent(started.planning_event_id)
-      notify(`Перепланирование #${started.planning_event_id} поставлено в обработку`)
+      setBoard((current) => ({ ...current, active_run: { id: started.planning_event_id, state: started.state, phase: 'Подготовка данных', started_at: new Date().toISOString() } }))
+      emitPlanningEvent('planning_run_started', { project_id: projectId, event_id: started.planning_event_id, reused: !!started.reuse })
+      notify(started.reuse ? 'Уже выполняющийся расчёт открыт' : 'Расчёт маршрутов запущен')
     } catch (error) { notify(error.message, 'error') } finally { setBusy(false) }
   }
 
-  const groupedAssignments = useMemo(() => {
-    const days = new Map()
-    safeArray(plan.assignments).forEach((item) => {
-      if (!days.has(item.planning_date)) days.set(item.planning_date, new Map())
-      const engineers = days.get(item.planning_date)
-      if (!engineers.has(item.engineer_id)) engineers.set(item.engineer_id, [])
-      engineers.get(item.engineer_id).push(item)
-    })
-    return [...days.entries()]
-  }, [plan.assignments])
-  const unassigned = safeArray(plan.version?.unassigned_jobs)
-  const metrics = plan.version?.metrics || {}
-  const routeMetrics = plan.route_metrics || {}
-  const currentVersionId = versions.find((item) => item.is_current)?.id
+  async function openExplanation(job, trigger, explicitResultId = null) {
+    setReturnFocus(trigger || returnFocus)
+    setDrawer({ job })
+    setDrawerLoading(true)
+    const resultId = explicitResultId || day?.day_result_id
+    emitPlanningEvent('planning_job_details_opened', { project_id: projectId, day_result_id: resultId, job_id: job.job_id })
+    if (!resultId) { setDrawer({ job }); setDrawerLoading(false); return }
+    try { setDrawer(await api(`${base}/day-results/${resultId}/jobs/${job.job_id}/explanation`)) }
+    catch (error) { notify(error.message, 'error'); setDrawer({ job }) }
+    finally { setDrawerLoading(false) }
+  }
+
+  const allCards = useMemo(() => [
+    ...safeArray(day?.engineer_columns).flatMap((column) => [...safeArray(column.jobs), ...safeArray(column.cancelled_jobs)]),
+    ...safeArray(day?.unassigned?.moved), ...safeArray(day?.unassigned?.horizon),
+  ], [day])
+  const filterJob = (job) => matchesPlanningFilters(job, filters)
+  const visibleCount = allCards.filter(filterJob).length
+  const filtered = filters.search || filters.priority || filters.status || filters.outcome !== 'ALL'
+  const activeRun = board?.active_run
+  const calculating = activeStates.has(activeRun?.state)
 
   return <>
-    <PageHeader eyebrow="Динамическое планирование" title="Планирование" subtitle="Новые заявки автоматически перестраивают допустимую часть маршрутов; весь многодневный план публикуется одной версией." actions={<>{!ownerMode && <PlanningConfig notify={notify} />}<Button icon="refresh" disabled={busy || readiness?.ready === false || activeEventStates.has(event?.state)} onClick={calculate}>{busy ? 'Запускаем…' : activeEventStates.has(event?.state) ? 'Планирование выполняется…' : 'Пересчитать и опубликовать'}</Button></>} />
-    <section className="cascade-intro"><div><small>Текущая дата проекта</small><b>{formatDate(projectToday)}</b><span>Определяется часовым поясом проекта.</span></div><div><small>Публикация</small><b>Весь горизонт одной версией</b><span>Ручного подтверждения отдельных дней больше нет.</span></div><div><small>Актуальная версия</small><b>{plan.version ? `Версия ${plan.version.version_number}` : 'Ещё не опубликована'}</b><span>{plan.version ? formatDateTime(plan.version.published_at) : 'Запустите первый расчёт.'}</span></div><div className={`readiness ${readiness?.ready ? 'ready' : 'not-ready'}`}><span>{readiness?.ready ? '✓' : '!'}</span><div><b>{readiness?.ready ? 'Данные готовы' : 'Нужно подготовить данные'}</b>{readiness?.problems?.map((item) => <small key={item.code}>{item.message}</small>)}</div></div></section>
-    <EventProgress event={event} />
-    <div className="planning-grid cascade-grid"><section className="table-card run-list"><header><h2>Версии плана</h2><span>{versions.length}</span></header>{versions.length ? <><button className={selectedVersionId === null ? 'active' : ''} onClick={openCurrent}><span><b>Текущая версия</b><small>Автоматически обновляется</small></span>{plan.version && selectedVersionId === null && <Badge status="PUBLISHED">#{plan.version.version_number}</Badge>}</button>{versions.map((item) => <button key={item.id} className={selectedVersionId === item.id ? 'active' : ''} onClick={() => openVersion(item.id)}><span><b>Версия {item.version_number}</b><small>{formatDateTime(item.published_at)}</small></span><span><Badge status={item.is_current ? 'PUBLISHED' : 'SUPERSEDED'}>{item.is_current ? 'Текущая' : 'Архив'}</Badge><small>{triggerLabels[item.trigger_source] || item.trigger_source}</small></span></button>)}</> : <Empty title="Версий пока нет" text="Запустите первый расчёт или создайте новую заявку." />}</section>
-      <section className="cascade-result">{plan.version ? <><div className="result-head"><div><span className="eyebrow">{plan.version.id === currentVersionId ? 'Опубликованный план' : 'Архивная версия'}</span><h2>Версия {plan.version.version_number}</h2><p>{triggerLabels[plan.version.trigger_source] || plan.version.trigger_source} · {formatDateTime(plan.version.published_at)}</p>{metrics.feasible_time_limit && <Badge status="PENDING">Допустимый план, оптимальность не доказана</Badge>}</div><Badge status={plan.version.is_current ? 'PUBLISHED' : 'SUPERSEDED'}>{plan.version.is_current ? 'Текущая' : 'Архив'}</Badge></div><div className="mini-stats"><div><small>Назначено</small><b>{safeArray(plan.assignments).length}</b></div><div><small>Инженеров</small><b>{routeMetrics.active_engineers ?? '—'}</b></div><div><small>Общий пробег</small><b>{routeMetrics.total_distance_meters != null ? `${(routeMetrics.total_distance_meters / 1000).toFixed(1)} км` : '—'}</b></div><div><small>Макс. маршрут</small><b>{routeMetrics.maximum_route_distance_meters != null ? `${(routeMetrics.maximum_route_distance_meters / 1000).toFixed(1)} км` : '—'}</b></div><div><small>Не назначено</small><b>{unassigned.length}</b></div><div><small>Изменений</small><b>{safeArray(plan.changes).length}</b></div><div><small>Обработано дней</small><b>{metrics.processed_days ?? '—'}</b></div></div><div className="cascade-tabs"><button className={view === 'routes' ? 'active' : ''} onClick={() => setView('routes')}>Маршруты и карта</button><button className={view === 'changes' ? 'active' : ''} onClick={() => setView('changes')}>Изменения</button><button className={view === 'unassigned' ? 'active' : ''} onClick={() => setView('unassigned')}>Не назначено</button></div>{view === 'routes' && <div className="version-routes">{groupedAssignments.length ? groupedAssignments.map(([date, engineers]) => <VersionDay key={date} date={date} engineers={engineers} projectToday={projectToday} />) : <Empty title="Назначений нет" text="В этой версии нет опубликованных маршрутов." />}</div>}{view === 'changes' && <div className="plan-change-list">{safeArray(plan.changes).length ? plan.changes.map((item) => { const changedFields = changedAssignmentFields(item.old_assignment, item.new_assignment); return <article key={item.id}><div><b>Заявка #{item.job_id}</b><small>{changeReasonLabels[item.reason] || item.reason}</small></div><Badge status={item.change_type}>{changeLabels[item.change_type] || item.change_type}</Badge><p>{assignmentText(item.old_assignment)} → {assignmentText(item.new_assignment)}</p>{changedFields.length > 0 && <ul className="assignment-diff">{changedFields.map((field) => <li key={field}>{field}</li>)}</ul>}</article> }) : <Empty title="Изменений нет" text="Это первая версия либо назначения совпали с предыдущей версией." />}</div>}{view === 'unassigned' && <div className="batch-backlog">{unassigned.length ? unassigned.map((item) => <article key={item.job_id}><div><b>Заявка #{item.job_id}</b><small>SLA: {formatDate(item.sla_date)}</small></div><Badge status="PENDING">Не назначена</Badge><p>{reasonLabels[item.primary_reason_code] || item.primary_reason_code || 'Нет допустимого назначения'}</p>{item.sla_risk && <span>Есть риск нарушения SLA</span>}</article>) : <Empty title="Все заявки назначены" text="В опубликованной версии нет неназначенных заявок." />}</div>}</> : <Empty title="Опубликованного плана пока нет" text="Создайте заявку или запустите ручной расчёт. После завершения весь горизонт опубликуется автоматически." />}</section></div>
+    <PageHeader eyebrow="Маршруты на семь дней" title="Планирование" subtitle="Актуальный опубликованный план и объяснение каждого результата." actions={<><PlanningConfig notify={notify} endpoint={ownerMode ? `/api/projects/${projectId}/planning-config` : '/api/project/planning-config'} /><Button icon="refresh" disabled={loading || !board || busy || calculating || board?.readiness?.ready === false} onClick={calculate}>{calculating ? 'Расчёт выполняется' : 'Рассчитать маршруты'}</Button><Readiness value={board?.readiness} onNavigate={(section) => onNavigate?.(readinessTarget(section, ownerMode))} /></>} />
+    <RunBanner run={activeRun} hasPlan={!!board?.plan_version} onRetry={calculate} timeZone={board?.timezone} />
+    {board?.plan_version?.status === 'PARTIAL' && <section className="board-alert warning"><div><b>Часть заявок не назначена</b><span>Валидная часть плана опубликована; причины находятся в последней колонке.</span></div></section>}
+    {board?.plan_version?.status === 'FEASIBLE_TIME_LIMIT' && <section className="board-alert warning"><div><b>Найден допустимый план, оптимальность не доказана</b><span>Расчёт завершён по лимиту времени.</span></div></section>}
+    {loading ? <div className="board-loading"><span className="spinner" /> Загружаем актуальный план…</div> : <>
+      <DateStrip days={board?.days} selected={selectedDate} today={board?.project_date} onSelect={selectDate} />
+      <ResultContext version={board?.plan_version} timeZone={board?.timezone} />
+      {!board?.plan_version ? <Empty title="План ещё не рассчитан" text={board?.readiness?.ready === false ? 'Подготовьте обязательные данные, затем запустите расчёт.' : 'Нажмите «Рассчитать маршруты», чтобы опубликовать первый план.'} action={board?.readiness?.ready !== false && <Button onClick={calculate}>Рассчитать маршруты</Button>} /> : <>
+        <section className="board-filters"><label className="board-search"><span>⌕</span><input aria-label="Поиск по адресу и типу работ" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Адрес или тип работ" /></label><select aria-label="Приоритет" value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}><option value="">Обычная / Авария</option><option value="NORMAL">Обычная</option><option value="EMERGENCY">Авария</option></select><select aria-label="Статус заявки" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Все статусы</option>{safeArray(day?.available_filters?.statuses).map((status) => <option key={status} value={status}>{statusLabels[status] || status}</option>)}</select><select aria-label="Результат" value={filters.outcome} onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}><option value="ALL">Все</option><option value="ASSIGNED">Назначенные</option><option value="UNASSIGNED_TODAY">Неназначенные</option></select>{filtered && <span className="shown-count">Показано {visibleCount} из {allCards.length}</span>}</section>
+        {!day ? <div className="board-loading"><span className="spinner" /> Загружаем день…</div> : !day.result_available ? <Empty title="Для этой даты нет результата расчёта" text="Дата не рассчитывалась в актуальной версии плана." /> : <div className="route-board"><div className="route-board-scroll">{safeArray(day.engineer_columns).map((column) => <EngineerColumn key={column.engineer_id} column={column} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} />)}<UnassignedColumn value={day.unassigned} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} /></div></div>}
+      </>}
+    </>}
+    {drawer && <ExplanationDrawer value={drawer} loading={drawerLoading} updated={drawerUpdated} onClose={() => { setDrawer(null); setDrawerUpdated(false) }} returnFocus={returnFocus} timeZone={board?.timezone} />}
   </>
 }

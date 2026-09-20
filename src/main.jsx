@@ -52,7 +52,7 @@ function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   useEffect(() => {
-    api('/api/auth/me').then(setUser).catch(() => setUser(null)).finally(() => setLoading(false))
+    api('/api/auth/me').catch(() => null).then(setUser).finally(() => setLoading(false))
     const expire = () => setUser(null)
     window.addEventListener('route-app:unauthorized', expire)
     return () => window.removeEventListener('route-app:unauthorized', expire)

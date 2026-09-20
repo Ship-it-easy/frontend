@@ -9,11 +9,11 @@ function formatSafely(value, options, dateOnly = false) {
   return new Intl.DateTimeFormat('ru-RU', options).format(date)
 }
 export const formatDate = (value) => formatSafely(value, undefined, true)
-export const formatDateTime = (value) => formatSafely(value, { dateStyle: 'short', timeStyle: 'short' })
-export const formatTime = (value) => {
+export const formatDateTime = (value, timeZone) => formatSafely(value, { dateStyle: 'short', timeStyle: 'short', ...(timeZone ? { timeZone } : {}) })
+export const formatTime = (value, timeZone) => {
   if (!value) return '—'
   const text = String(value)
-  if (text.includes('T')) return formatSafely(value, { hour: '2-digit', minute: '2-digit' })
+  if (text.includes('T')) return formatSafely(value, { hour: '2-digit', minute: '2-digit', ...(timeZone ? { timeZone } : {}) })
   return text.slice(0, 5)
 }
 

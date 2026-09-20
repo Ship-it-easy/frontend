@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, qs } from './api.js'
 import DynamicPlanningPage from './DynamicPlanningPage.jsx'
-import RoutesMap from './RoutesMap.jsx'
 import { AddressField, Badge, Button, CheckGroup, Empty, Field, Icon, Modal, PageHeader, Shell, StatCard, Toast, formatDate, formatDateTime, formatTime, today } from './ui.jsx'
 
 const nav = [
@@ -11,9 +10,6 @@ const nav = [
   { id: 'catalogs', label: 'Справочники', icon: 'catalogs' },
 ]
 const statusLabels = { NEW: 'Новая', IN_PROGRESS: 'В работе', COMPLETED: 'Выполнена', CANCELLED: 'Отменена' }
-const reasonLabels = { NO_ELIGIBLE_ENGINEER: 'Нет подходящего инженера', NO_SKILL: 'Нет квалификации', NO_EQUIPMENT: 'Нет оборудования', NO_TRANSPORT: 'Нет транспорта', TIME_WINDOW: 'Не помещается во временное окно', SHIFT: 'Не помещается в смену', DROPPED_BY_OPTIMIZER: 'Не выбрана оптимизатором', INVALID_INPUT: 'Некорректные данные заявки', GEOCODING_FAILED: 'Адрес не удалось определить', MISSING_SERVICE_DURATION: 'Не задана длительность работы', NO_COMPATIBLE_ENGINEER_IN_HORIZON: 'Нет совместимого инженера в горизонте', NO_SHIFT_IN_HORIZON: 'Нет смен в горизонте', DURATION_EXCEEDS_ALL_SHIFTS: 'Работа не помещается ни в одну смену', EQUIPMENT_UNAVAILABLE_IN_HORIZON: 'Оборудование недоступно', INVALID_TIME_WINDOW_FOR_HORIZON: 'Окно недоступно во всём горизонте', NO_AVAILABLE_ENGINEER_TODAY: 'Нет доступного инженера в этот день', NOT_SELECTED_BY_OPTIMIZER: 'Не выбрана оптимизатором', DATASET_LIMIT: 'Отложена из-за лимита набора', TRAVEL_DATA_NOT_READY: 'Дорожные данные не готовы', DAILY_TIME_WINDOW_CONFLICT: 'Конфликт окна в этот день', DAILY_EQUIPMENT_CAPACITY: 'Оборудование занято в этот день', NOT_ASSIGNED_WITHIN_HORIZON: 'Не назначена в пределах горизонта' }
-const completionLabels = { ALL_ELIGIBLE_ASSIGNED: 'Все подходящие заявки назначены', NO_ELIGIBLE_JOBS: 'Нет подходящих заявок', NO_FUTURE_OPPORTUNITIES: 'В горизонте больше нет возможностей', HORIZON_LIMIT: 'Достигнут горизонт 30 дней', STOPPED_BY_USER: 'Расчёт остановлен пользователем', DAY_RUN_FAILED: 'Ошибка дневного расчёта', TOTAL_TIME_LIMIT: 'Достигнут общий лимит времени', SYSTEM_ERROR: 'Системная ошибка' }
-const activeBatchStatuses = new Set(['CREATED', 'PREPARING', 'RUNNING', 'STOP_REQUESTED'])
 const planningImpactText = 'Изменение не запускает автоматическое перепланирование. Оно попадёт в следующий ручной или ночной расчёт.'
 const safeArray = (value) => Array.isArray(value) ? value : []
 
@@ -307,104 +303,15 @@ function CatalogsPage({ catalogs, reload, notify }) {
   return <><PageHeader eyebrow="Настройка проекта" title="Справочники" subtitle="Свяжите типы работ с квалификациями, транспортом и оборудованием." /><div className="catalog-tabs">{Object.entries(meta).map(([id, item]) => <button className={tab === id ? 'active' : ''} key={id} onClick={() => setTab(id)}>{item.label}<span>{safeArray(catalogs[id]).length}</span></button>)}</div><div className="content-split catalog-layout"><div className="table-card"><table><thead><tr><th>Название</th>{tab === 'work-types' && <><th>Длительность</th><th>Транспорт</th><th>Требования</th></>}{tab === 'equipment-types' && <th>Количество</th>}<th>Статус</th><th /></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><b>{item.name}</b></td>{tab === 'work-types' && <><td>{item.default_service_duration_min} мин</td><td>{item.required_transport === 'CAR' ? 'Автомобиль' : 'Не требуется'}</td><td><div className="tag-row">{safeArray(item.qualification_ids).map((id) => <span key={`q${id}`}>{safeArray(catalogs.qualifications).find((x) => x.id === id)?.name || `Навык #${id}`}</span>)}{safeArray(item.equipment_type_ids).map((id) => <span className="purple" key={`e${id}`}>{safeArray(catalogs['equipment-types']).find((x) => x.id === id)?.name || `Оборудование #${id}`}</span>)}</div></td></>}{tab === 'equipment-types' && <td><span className="quantity">{item.available_units ?? 0}</span></td>}<td><Badge status={item.active ? 'ACTIVE' : 'BLOCKED'}>{item.active ? 'Активен' : 'Архив'}</Badge></td><td><div className="row-actions"><button onClick={() => edit(item)}>Изменить</button>{tab === 'equipment-types' && <button className="danger-link" onClick={() => clear(item)}>Обнулить</button>}<button onClick={() => toggle(item)}>{item.active ? 'В архив' : 'Включить'}</button></div></td></tr>)}</tbody></table>{!items.length && <Empty title="Справочник пуст" text={`Добавьте первый ${meta[tab].single}.`} />}</div><form className="side-form sticky" onSubmit={save}><span className="form-symbol">+</span><h3>{editing ? 'Редактирование' : `Новый ${meta[tab].single}`}</h3><Field label="Название"><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>{tab === 'equipment-types' && <Field label="Количество"><input min="0" type="number" value={form.available_units} onChange={(event) => setForm({ ...form, available_units: event.target.value })} /></Field>}{tab === 'work-types' && <><Field label="Длительность, мин"><input min="1" type="number" value={form.default_service_duration_min} onChange={(event) => setForm({ ...form, default_service_duration_min: event.target.value })} /></Field><Field label="Транспорт"><select value={form.required_transport || ''} onChange={(event) => setForm({ ...form, required_transport: event.target.value })}><option value="">Не требуется</option><option value="CAR">Автомобиль</option></select></Field><div><div className="section-label">Квалификации</div><CheckGroup items={safeArray(catalogs.qualifications).filter((x) => x.active)} value={form.qualification_ids} onChange={(qualification_ids) => setForm({ ...form, qualification_ids })} /></div><div><div className="section-label">Оборудование</div><CheckGroup items={safeArray(catalogs['equipment-types']).filter((x) => x.active)} value={form.equipment_type_ids} onChange={(equipment_type_ids) => setForm({ ...form, equipment_type_ids })} /></div></>}<label className="switch-row compact"><span><b>Активен</b></span><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /></label><Button className="wide">{editing ? 'Сохранить' : 'Добавить'}</Button>{editing && <Button type="button" kind="ghost" onClick={() => { setEditing(null); setForm(empty()) }}>Отмена</Button>}</form></div></>
 }
 
-function PlanningConfig({ notify }) {
-  const [config, setConfig] = useState(null), [open, setOpen] = useState(false)
-  useEffect(() => { api('/api/project/planning-config').then(setConfig).catch(() => setConfig(null)) }, [])
-  async function save(event) { event.preventDefault(); const form = new FormData(event.currentTarget); const body = {}; for (const [key, value] of form) body[key] = Number(value); try { setConfig(await api('/api/project/planning-config', { method: 'PATCH', body: JSON.stringify(body) })); notify('Настройки расчёта сохранены'); setOpen(false) } catch (error) { notify(error.message, 'error') } }
-  if (!config) return null
-  const fields = [['solver_time_limit_sec', 'Лимит solver на день, сек'], ['batch_total_time_limit_sec', 'Лимит каскада, сек'], ['max_jobs_per_run', 'Заявок за дневной расчёт'], ['max_jobs_per_batch', 'Заявок в batch'], ['future_opportunity_critical', 'Бонус: одна возможность'], ['future_opportunity_high', 'Бонус: 2–3 возможности'], ['future_opportunity_limited', 'Бонус: 4–7 возможностей'], ['travel_cost_per_minute', 'Цена минуты пути'], ['sla_today', 'Штраф SLA сегодня'], ['sla_tomorrow', 'Штраф SLA завтра'], ['sla_overdue_base', 'Базовый штраф просрочки']]
-  return <><Button kind="secondary" icon="settings" onClick={() => setOpen(true)}>Параметры</Button>{open && <Modal wide title="Параметры оптимизации" subtitle={`Версия конфигурации ${config.version}`} onClose={() => setOpen(false)}><form className="stack-form" onSubmit={save}><div className="form-grid">{fields.map(([name, label]) => <Field label={label} key={name}><input name={name} type="number" min="0" defaultValue={config[name]} /></Field>)}</div><div className="form-actions"><Button type="button" kind="ghost" onClick={() => setOpen(false)}>Отмена</Button><Button>Сохранить новую версию</Button></div></form></Modal>}</>
+
+export function PlanningPage({ projectId, ownerMode = false, ...props }) {
+  return <DynamicPlanningPage projectId={projectId} ownerMode={ownerMode} {...props} />
 }
-
-function LegacyPlanningPage({ projectId, notify, ownerMode = false }) {
-  const [planningContext, setPlanningContext] = useState(null)
-  const [readiness, setReadiness] = useState(null)
-  const [batches, setBatches] = useState([])
-  const [batch, setBatch] = useState(null)
-  const [selectedDate, setSelectedDate] = useState(null)
-  const [view, setView] = useState('days')
-  const [busy, setBusy] = useState(false)
-  const projectToday = planningContext?.planning_date || null
-
-  const loadHistory = () => api(`/api/projects/${projectId}/planning/batches?limit=50`).then((value) => setBatches(safeArray(value))).catch((error) => notify(error.message, 'error'))
-  const openBatch = async (id, quiet = false) => {
-    try {
-      const value = await api(`/api/projects/${projectId}/planning/batches/${id}`)
-      setBatch(value)
-      setSelectedDate((current) => current && value.days?.some((day) => day.planning_date === current) ? current : value.days?.[0]?.planning_date || null)
-      return value
-    } catch (error) { if (!quiet) notify(error.message, 'error'); return null }
-  }
-
-  useEffect(() => {
-    setPlanningContext(null)
-    setReadiness(null)
-    setBatch(null)
-    setSelectedDate(null)
-    loadHistory()
-    api(`/api/projects/${projectId}/planning/context`).then((value) => {
-      setPlanningContext(value)
-      if (ownerMode) setReadiness({ ready: true, problems: [] })
-      else api(`/api/project/planning/readiness?planning_date=${value.planning_date}`).then(setReadiness).catch((error) => notify(error.message, 'error'))
-    }).catch((error) => notify(error.message, 'error'))
-  }, [projectId, ownerMode])
-
-  useEffect(() => {
-    if (!batch || !activeBatchStatuses.has(batch.status)) return undefined
-    const timer = window.setInterval(async () => {
-      const value = await openBatch(batch.id, true)
-      if (value && !activeBatchStatuses.has(value.status)) { loadHistory(); notify('Многодневный расчёт завершён') }
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [batch?.id, batch?.status])
-
-  async function calculate() {
-    if (!projectToday) return
-    setBusy(true)
-    try {
-      const started = await api(`/api/projects/${projectId}/planning/batches`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ requested_start_date: projectToday }) })
-      await openBatch(started.planning_batch_id)
-      loadHistory()
-      notify(started.reuse ? 'Показан актуальный расчёт с теми же исходными данными' : 'Многодневный расчёт запущен')
-    } catch (error) { notify(error.message, 'error') } finally { setBusy(false) }
-  }
-
-  async function stop() {
-    if (!batch) return
-    try { setBatch(await api(`/api/projects/${projectId}/planning/batches/${batch.id}/stop`, { method: 'POST' })); notify('Остановка запрошена') }
-    catch (error) { notify(error.message, 'error') }
-  }
-
-  async function publish(day) {
-    if (!day?.planning_run_id || day.planning_date !== projectToday) return
-    if (batch.status === 'PARTIAL' && !window.confirm('Многодневный расчёт завершён частично. Опубликовать валидный план текущего дня?')) return
-    try {
-      const validation = await api(`/api/projects/${projectId}/planning/batches/${batch.id}/validate-current-day`, { method: 'POST' })
-      if (!validation.valid_for_publication) { notify('Исходные данные изменились. Запустите новый расчёт.', 'error'); await openBatch(batch.id); return }
-      const hasUnassigned = day.unassigned_jobs?.length > 0
-      if (hasUnassigned && !window.confirm(`В текущем дне останется неназначенных заявок: ${day.unassigned_jobs.length}. Опубликовать?`)) return
-      await api(`/api/projects/${projectId}/planning/runs/${day.planning_run_id}/publish`, { method: 'POST', body: JSON.stringify({ confirm_unassigned: hasUnassigned, confirm_partial_batch: batch.status === 'PARTIAL' }) })
-      notify('План текущего дня опубликован')
-    } catch (error) { notify(error.message, 'error') }
-  }
-
-  const selectedDay = batch?.days?.find((day) => day.planning_date === selectedDate)
-  const currentDay = batch?.days?.find((day) => day.planning_date === projectToday)
-  const metrics = batch?.metrics || {}
-  return <>
-    <PageHeader eyebrow="Управляемый каскад" title="Планирование" subtitle="Единый черновой план на 7 дней с автоматическим расширением до 30 дней." actions={<>{!ownerMode && <PlanningConfig notify={notify} />}{batch && activeBatchStatuses.has(batch.status) ? <Button kind="danger" onClick={stop}>Остановить расчёт</Button> : <Button icon="refresh" disabled={busy || !projectToday || readiness?.ready === false} onClick={calculate}>{busy ? 'Запускаем…' : 'Рассчитать планы на следующие дни'}</Button>}</>} />
-    <section className="cascade-intro"><div><small>Дата запуска</small><b>{formatDate(projectToday)}</b><span>Дата определяется timezone проекта и недоступна для изменения.</span></div><div><small>Начальный горизонт</small><b>7 календарных дней</b><span>Расширяется блоками только при наличии остатка.</span></div><div><small>Максимальный горизонт</small><b>30 календарных дней</b><span>Будущие планы остаются черновиками.</span></div><div className={`readiness ${readiness?.ready ? 'ready' : 'not-ready'}`}><span>{readiness?.ready ? '✓' : '!'}</span><div><b>{readiness?.ready ? 'Данные готовы' : 'Нужно подготовить данные'}</b>{readiness?.problems?.map((item) => <small key={item.code}>{item.message}</small>)}</div></div></section>
-    <div className="planning-grid cascade-grid"><section className="table-card run-list"><header><h2>История запусков</h2><span>{batches.length}</span></header>{batches.length ? batches.map((item) => <button key={item.id} className={batch?.id === item.id ? 'active' : ''} onClick={() => openBatch(item.id)}><span><b>{formatDate(item.requested_start_date)}</b><small>{formatDateTime(item.created_at)}</small></span><span><Badge status={item.status}>{item.status}</Badge><small>{completionLabels[item.completion_reason] || 'Расчёт выполняется'}</small></span></button>) : <Empty title="Запусков пока нет" text="Рассчитайте единый черновой план на следующие дни." />}</section>
-      <section className="cascade-result">{batch ? <><div className="result-head"><div><span className="eyebrow">Текущий результат</span><h2>{formatDate(batch.effective_start_date)} — {formatDate(batch.maximum_horizon_end)}</h2><p>{completionLabels[batch.completion_reason] || 'Расчёт выполняется'}</p></div><Badge status={batch.status}>{batch.status}</Badge></div>{batch.stale_for_publication && <div className="stale-warning">Исходные данные изменились. Публикация заблокирована — запустите новый расчёт.</div>}<div className="mini-stats"><div><small>Назначено</small><b>{batch.progress?.assigned ?? metrics.assigned ?? 0}</b></div><div><small>Осталось</small><b>{batch.progress?.remaining ?? metrics.remaining ?? 0}</b></div><div><small>Обработано дней</small><b>{batch.progress?.processed_days ?? metrics.processed_days ?? 0}</b></div><div><small>Постоянные проблемы</small><b>{metrics.permanent_issues ?? batch.backlog?.filter((job) => job.processing_status === 'PERMANENT_ISSUE').length ?? 0}</b></div></div><div className="cascade-tabs"><button className={view === 'days' ? 'active' : ''} onClick={() => setView('days')}>По дням</button><button className={view === 'backlog' ? 'active' : ''} onClick={() => setView('backlog')}>Остаток и проблемы</button><button className={view === 'summary' ? 'active' : ''} onClick={() => setView('summary')}>Итоги</button></div>{view === 'days' && <><div className="day-strip">{safeArray(batch.days).map((day) => <button key={day.planning_date} className={selectedDate === day.planning_date ? 'active' : ''} onClick={() => setSelectedDate(day.planning_date)}><b>{formatDate(day.planning_date)}</b><Badge status={day.status}>{day.status === 'SKIPPED_NO_SHIFT' ? 'Нет смен' : day.status}</Badge><small>{day.assigned_count || 0} назначено</small></button>)}</div>{selectedDay ? <><div className="routes-summary day-detail"><h3>{formatDate(selectedDay.planning_date)} <small>{selectedDay.planning_date === projectToday ? 'Текущий день' : 'Черновик будущего дня'}</small></h3>{safeArray(selectedDay.routes).map((route) => <article key={route.engineer_id}><header><b>{route.engineer_name}</b><span>{route.total_travel_min} мин в пути · {route.total_service_min} мин работ</span></header>{safeArray(route.jobs).map((job) => <div key={job.job_id}><span className="sequence">{job.sequence}</span><b>{job.address}</b><small>{formatTime(job.planned_start)}–{formatTime(job.planned_finish)}</small></div>)}</article>)}{selectedDay.status === 'SKIPPED_NO_SHIFT' && <Empty title="Нет валидных смен" text="Дата учитывается в горизонте, остаток перенесён на следующий день." />}{selectedDay.status === 'PENDING' && <Empty title="Ожидает расчёта" text="День будет рассчитан после сохранения предыдущего." />}{!selectedDay.routes?.length && selectedDay.status === 'SUCCESS' && <Empty title="Назначений нет" text="Solver не нашёл допустимых назначений; заявки перенесены дальше." />}</div>{selectedDay.status === 'SUCCESS' && !!selectedDay.routes?.length && <RoutesMap result={selectedDay} />}</> : <Empty title="Дни ещё не открыты" text="Первый семидневный блок появится после подготовки snapshot." />}</>}{view === 'backlog' && <div className="batch-backlog">{safeArray(batch.backlog).length ? safeArray(batch.backlog).map((job) => <article key={job.job_id}><div><b>{job.address}</b><small>SLA: {formatDate(job.snapshot_sla_date)} · последняя попытка: {job.last_considered_date ? formatDate(job.last_considered_date) : 'не было'}</small></div><Badge status={job.processing_status}>{job.processing_status === 'PERMANENT_ISSUE' ? 'Постоянная проблема' : 'Остаток'}</Badge><p>{reasonLabels[job.primary_reason_code] || 'Ожидает следующего дня'}</p><span>Будущих возможностей: {job.future_opportunity_count ?? '—'}</span></article>) : <Empty title="Остатка нет" text="Все подходящие заявки получили черновое назначение." />}</div>}{view === 'summary' && <div className="batch-summary"><div><small>Фактический старт</small><b>{formatDate(batch.effective_start_date)}</b></div><div><small>Последняя обработанная дата</small><b>{batch.processed_through_date ? formatDate(batch.processed_through_date) : '—'}</b></div><div><small>Успешные дни</small><b>{metrics.successful_days ?? 0}</b></div><div><small>Пропущенные дни без смен</small><b>{metrics.skipped_days ?? 0}</b></div><div><small>Время расчёта</small><b>{metrics.duration_ms ? `${Math.round(metrics.duration_ms / 1000)} сек` : '—'}</b></div><div><small>Версия конфигурации</small><b>{batch.configuration_version}</b></div></div>}{currentDay?.status === 'SUCCESS' && !activeBatchStatuses.has(batch.status) && <Button className="wide publish" onClick={() => publish(currentDay)}>Проверить и опубликовать текущий день</Button>}</> : <Empty title="Выберите запуск" text="Здесь отображаются рассчитанные дни, остаток и подтверждённые причины." />}</section></div>
-  </>
-}
-
-export const PlanningPage = DynamicPlanningPage
 
 export default function DispatcherApp({ user, onLogout }) {
   const [section, setSection] = useState('jobs'), [toast, setToast] = useState(null), [catalogs, setCatalogs] = useState({ qualifications: [], 'equipment-types': [], 'work-types': [] })
   const notify = (message, type = 'info') => setToast({ message, type, key: Date.now() })
   const loadCatalogs = () => Promise.all([api('/api/project/qualifications'), api('/api/project/equipment-types'), api('/api/project/work-types')]).then(([qualifications, equipment, workTypes]) => setCatalogs({ qualifications: Array.isArray(qualifications) ? qualifications : [], 'equipment-types': Array.isArray(equipment) ? equipment : [], 'work-types': Array.isArray(workTypes) ? workTypes : [] })).catch((error) => notify(error.message, 'error'))
   useEffect(() => { void loadCatalogs() }, [])
-  return <Shell user={user} roleLabel="Диспетчер" contextLabel="Проект" contextValue={`Проект #${user.project_id}`} nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'jobs' && <JobsPage workTypes={catalogs['work-types']} notify={notify} />}{section === 'engineers' && <EngineersPage qualifications={catalogs.qualifications} notify={notify} />}{section === 'catalogs' && <CatalogsPage catalogs={catalogs} reload={loadCatalogs} notify={notify} />}{section === 'planning' && <PlanningPage projectId={user.project_id} notify={notify} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
+  return <Shell user={user} roleLabel="Диспетчер" contextLabel="Проект" contextValue={`Проект #${user.project_id}`} nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'jobs' && <JobsPage workTypes={catalogs['work-types']} notify={notify} />}{section === 'engineers' && <EngineersPage qualifications={catalogs.qualifications} notify={notify} />}{section === 'catalogs' && <CatalogsPage catalogs={catalogs} reload={loadCatalogs} notify={notify} />}{section === 'planning' && <PlanningPage user={user} projectId={user.project_id} notify={notify} onNavigate={setSection} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
 }
