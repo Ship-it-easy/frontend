@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, qs } from './api.js'
 import DynamicPlanningPage from './DynamicPlanningPage.jsx'
+import JobImports from './JobImports.jsx'
 import { AddressField, Badge, Button, CheckGroup, Empty, Field, Icon, Modal, PageHeader, Shell, StatCard, Toast, formatDate, formatDateTime, formatTime, today } from './ui.jsx'
 
 const nav = [
   { id: 'jobs', label: 'Заявки', icon: 'jobs' },
+  { id: 'imports', label: 'Импорт CSV', icon: 'jobs' },
   { id: 'planning', label: 'Планирование', icon: 'planning' },
   { id: 'engineers', label: 'Инженеры', icon: 'engineers' },
   { id: 'catalogs', label: 'Справочники', icon: 'catalogs' },
@@ -313,5 +315,5 @@ export default function DispatcherApp({ user, onLogout }) {
   const notify = (message, type = 'info') => setToast({ message, type, key: Date.now() })
   const loadCatalogs = () => Promise.all([api('/api/project/qualifications'), api('/api/project/equipment-types'), api('/api/project/work-types')]).then(([qualifications, equipment, workTypes]) => setCatalogs({ qualifications: Array.isArray(qualifications) ? qualifications : [], 'equipment-types': Array.isArray(equipment) ? equipment : [], 'work-types': Array.isArray(workTypes) ? workTypes : [] })).catch((error) => notify(error.message, 'error'))
   useEffect(() => { void loadCatalogs() }, [])
-  return <Shell user={user} roleLabel="Диспетчер" contextLabel="Проект" contextValue={`Проект #${user.project_id}`} nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'jobs' && <JobsPage workTypes={catalogs['work-types']} notify={notify} />}{section === 'engineers' && <EngineersPage qualifications={catalogs.qualifications} notify={notify} />}{section === 'catalogs' && <CatalogsPage catalogs={catalogs} reload={loadCatalogs} notify={notify} />}{section === 'planning' && <PlanningPage user={user} projectId={user.project_id} notify={notify} onNavigate={setSection} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
+  return <Shell user={user} roleLabel="Диспетчер" contextLabel="Проект" contextValue={`Проект #${user.project_id}`} nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'jobs' && <JobsPage workTypes={catalogs['work-types']} notify={notify} />}{section === 'imports' && <JobImports projectId={user.project_id} notify={notify} onOpenJobs={() => setSection('jobs')} />}{section === 'engineers' && <EngineersPage qualifications={catalogs.qualifications} notify={notify} />}{section === 'catalogs' && <CatalogsPage catalogs={catalogs} reload={loadCatalogs} notify={notify} />}{section === 'planning' && <PlanningPage user={user} projectId={user.project_id} notify={notify} onNavigate={setSection} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
 }
