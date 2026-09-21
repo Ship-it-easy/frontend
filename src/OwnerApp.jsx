@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, qs } from './api.js'
 import { Badge, Button, Empty, Field, Icon, Modal, PageHeader, Shell, StatCard, Toast, formatDate } from './ui.jsx'
-import { JobForm, JobImportModal, PlanningPage, ScheduleEditor } from './DispatcherApp.jsx'
+import { JobForm, PlanningPage, ScheduleEditor } from './DispatcherApp.jsx'
+import JobImports from './JobImports.jsx'
 
 const nav = [
   { id: 'projects', label: 'Проекты', icon: 'projects' },
   { id: 'owners', label: 'Владельцы', icon: 'owners' },
   { id: 'jobs', label: 'Заявки', icon: 'jobs' },
+  { id: 'imports', label: 'Импорт CSV', icon: 'jobs' },
   { id: 'engineers', label: 'Инженеры', icon: 'engineers' },
   { id: 'planning', label: 'Планирование', icon: 'planning' },
 ]
@@ -88,13 +90,9 @@ function OwnerPlanning({ user, notify, onNavigate }) {
   return <><div className="owner-project-switch"><Field label="Проект для планирования"><select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Выберите проект</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name} · {project.planning_timezone}</option>)}</select></Field></div>{projectId ? <PlanningPage key={projectId} user={user} projectId={Number(projectId)} notify={notify} ownerMode onNavigate={onNavigate} /> : <Empty title="Нет активного проекта" text="Создайте или включите проект, чтобы запустить планирование." />}</>
 }
 
-function OwnerJobs({ notify }) {
+function OwnerImports({ notify, onOpenJobs }) {
   const [projects, setProjects] = useState([])
   const [projectId, setProjectId] = useState('')
-  const [jobs, setJobs] = useState([])
-  const [workTypes, setWorkTypes] = useState([])
-  const [editor, setEditor] = useState(false)
-  const [importOpen, setImportOpen] = useState(false)
   useEffect(() => {
     api('/api/admin/projects?status=ACTIVE').then((items) => {
       const values = Array.isArray(items) ? items : []
@@ -102,12 +100,32 @@ function OwnerJobs({ notify }) {
       setProjectId((current) => current || String(values[0]?.id || ''))
     }).catch((error) => notify(error.message, 'error'))
   }, [])
-  const load = () => projectId && api(`/api/projects/${projectId}/jobs`).then((items) => setJobs(Array.isArray(items) ? items : [])).catch((error) => notify(error.message, 'error'))
+  const selected = projects.find((project) => String(project.id) === String(projectId))
+  return <><div className="owner-project-switch"><Field label="Проект для импорта"><select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Выберите проект</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name} · {project.planning_timezone}</option>)}</select></Field></div>{projectId ? <JobImports key={projectId} projectId={Number(projectId)} projectLabel={selected?.name} notify={notify} onOpenJobs={(batchId) => onOpenJobs(Number(projectId), batchId)} /> : <Empty title="Нет активного проекта" text="Создайте или включите проект, чтобы импортировать заявки." />}</>
+}
+
+function OwnerJobs({ notify, importSelection, onClearImportFilter }) {
+  const [projects, setProjects] = useState([])
+  const [projectId, setProjectId] = useState('')
+  const [jobs, setJobs] = useState([])
+  const [workTypes, setWorkTypes] = useState([])
+  const [editor, setEditor] = useState(false)
+  useEffect(() => {
+    api('/api/admin/projects?status=ACTIVE').then((items) => {
+      const values = Array.isArray(items) ? items : []
+      setProjects(values)
+      setProjectId((current) => String(importSelection?.projectId || current || values[0]?.id || ''))
+    }).catch((error) => notify(error.message, 'error'))
+  }, [])
+  useEffect(() => {
+    if (importSelection?.projectId) setProjectId(String(importSelection.projectId))
+  }, [importSelection?.projectId])
+  const load = () => projectId && api(`/api/projects/${projectId}/jobs${qs({ import_batch_id: importSelection?.batchId })}`).then((items) => setJobs(Array.isArray(items) ? items : [])).catch((error) => notify(error.message, 'error'))
   useEffect(() => {
     if (!projectId) { setJobs([]); setWorkTypes([]); return }
     void load()
     api(`/api/projects/${projectId}/work-types`).then((items) => setWorkTypes(Array.isArray(items) ? items : [])).catch((error) => notify(error.message, 'error'))
-  }, [projectId])
+  }, [projectId, importSelection?.batchId])
   async function cancel(job) {
     const warning = job.status === 'IN_PROGRESS' ? '\n\nРабота уже выполняется: оставшийся маршрут инженера будет пересчитан.' : ''
     if (!window.confirm(`Отменить заявку #${job.id}?${warning}`)) return
@@ -118,7 +136,7 @@ function OwnerJobs({ notify }) {
       load()
     } catch (error) { notify(error.message, 'error') }
   }
-  return <><PageHeader eyebrow="Операционная работа" title="Заявки проектов" subtitle="Владелец может создавать, импортировать и отменять заявки; план перестроится автоматически." actions={projectId ? <><Button kind="secondary" onClick={() => setImportOpen(true)}>Импорт XLSX</Button><Button icon="plus" onClick={() => setEditor(true)}>Новая заявка</Button></> : null} /><div className="owner-project-switch"><Field label="Проект"><select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Выберите проект</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></Field></div>{projectId ? <div className="table-card">{jobs.length ? <table><thead><tr><th>Заявка</th><th>Адрес</th><th>Приоритет</th><th>Срок</th><th>Статус</th><th /></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td><b>#{job.id}</b></td><td className="address-cell">{job.address}</td><td><Badge status={job.priority_type}>{job.priority_type === 'EMERGENCY' ? 'Аварийная' : 'Обычная'}</Badge></td><td>{formatDate(job.sla_date)}</td><td><Badge status={job.status}>{job.status}</Badge></td><td>{['NEW', 'IN_PROGRESS'].includes(job.status) && <Button kind="danger" onClick={() => cancel(job)}>Отменить</Button>}</td></tr>)}</tbody></table> : <Empty title="Заявок нет" text="В выбранном проекте пока нет заявок." action={<Button icon="plus" onClick={() => setEditor(true)}>Создать заявку</Button>} />}</div> : <Empty title="Нет активного проекта" text="Создайте или включите проект." />}{editor && <JobForm apiBase={`/api/projects/${projectId}`} workTypes={workTypes} notify={notify} onSaved={load} onClose={() => setEditor(false)} />}{importOpen && <JobImportModal apiBase={`/api/projects/${projectId}`} notify={notify} onSaved={load} onClose={() => setImportOpen(false)} />}</>
+  return <><PageHeader eyebrow="Операционная работа" title="Заявки проектов" subtitle="Владелец может создавать и отменять заявки; план перестроится автоматически." actions={projectId ? <Button icon="plus" onClick={() => setEditor(true)}>Новая заявка</Button> : null} />{importSelection?.batchId && <div className="planning-impact-warning">Показаны заявки из пакета импорта #{importSelection.batchId}. <button className="text-action" onClick={onClearImportFilter}>Показать все заявки</button></div>}<div className="owner-project-switch"><Field label="Проект"><select value={projectId} onChange={(event) => { setProjectId(event.target.value); onClearImportFilter() }}><option value="">Выберите проект</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></Field></div>{projectId ? <div className="table-card">{jobs.length ? <table><thead><tr><th>Заявка</th><th>Адрес</th><th>Приоритет</th><th>Срок</th><th>Статус</th><th /></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td><b>#{job.id}</b></td><td className="address-cell">{job.address}</td><td><Badge status={job.priority_type}>{job.priority_type === 'EMERGENCY' ? 'Аварийная' : 'Обычная'}</Badge></td><td>{formatDate(job.sla_date)}</td><td><Badge status={job.status}>{job.status}</Badge></td><td>{['NEW', 'IN_PROGRESS'].includes(job.status) && <Button kind="danger" onClick={() => cancel(job)}>Отменить</Button>}</td></tr>)}</tbody></table> : <Empty title="Заявок нет" text="В выбранном проекте пока нет заявок." action={<Button icon="plus" onClick={() => setEditor(true)}>Создать заявку</Button>} />}</div> : <Empty title="Нет активного проекта" text="Создайте или включите проект." />}{editor && <JobForm apiBase={`/api/projects/${projectId}`} workTypes={workTypes} notify={notify} onSaved={load} onClose={() => setEditor(false)} />}</>
 }
 
 function OwnerEngineers({ notify }) {
@@ -141,7 +159,7 @@ function OwnerEngineers({ notify }) {
 }
 
 export default function OwnerApp({ user, onLogout }) {
-  const [section, setSection] = useState('projects'), [toast, setToast] = useState(null)
+  const [section, setSection] = useState('projects'), [toast, setToast] = useState(null), [importSelection, setImportSelection] = useState(null)
   const notify = (message, type = 'info') => setToast({ message, type, key: Date.now() })
-  return <Shell user={user} roleLabel="Владелец" contextLabel="Управление продуктом" contextValue="Все проекты" nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'projects' && <Projects notify={notify} />}{section === 'owners' && <Owners notify={notify} />}{section === 'jobs' && <OwnerJobs notify={notify} />}{section === 'engineers' && <OwnerEngineers notify={notify} />}{section === 'planning' && <OwnerPlanning user={user} notify={notify} onNavigate={setSection} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
+  return <Shell user={user} roleLabel="Владелец" contextLabel="Управление продуктом" contextValue="Все проекты" nav={nav} active={section} onNavigate={setSection} onLogout={onLogout}><div className="page-wrap">{section === 'projects' && <Projects notify={notify} />}{section === 'owners' && <Owners notify={notify} />}{section === 'jobs' && <OwnerJobs notify={notify} importSelection={importSelection} onClearImportFilter={() => setImportSelection(null)} />}{section === 'imports' && <OwnerImports notify={notify} onOpenJobs={(projectId, batchId) => { setImportSelection({ projectId, batchId }); setSection('jobs') }} />}{section === 'engineers' && <OwnerEngineers notify={notify} />}{section === 'planning' && <OwnerPlanning user={user} notify={notify} onNavigate={setSection} />}</div><Toast toast={toast} onClose={() => setToast(null)} /></Shell>
 }

@@ -1,0 +1,109 @@
+.import-status-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -8px 0 12px;
+  color: #61758d;
+  font-size: 11px;
+}
+
+.import-progress {
+  height: 6px;
+  margin-bottom: 18px;
+  border-radius: 99px;
+  background: #e7edf4;
+  overflow: hidden;
+}
+
+.import-progress i {
+  display: block;
+  height: 100%;
+  min-width: 8%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1478e8, #20a27a);
+  transition: width .3s;
+}
+
+.metric-warning { color: #a56c08; }
+
+.import-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: -7px 0 18px;
+}
+
+.import-summary > div {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid #e1e9f2;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.import-summary small { color: #718198; font-size: 9px; }
+.import-summary b { font-size: 12px; }
+
+.warning-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 14px;
+  border: 1px solid #edd49a;
+  border-radius: 11px;
+  background: #fff9e9;
+}
+
+.warning-ack input { margin-top: 3px; }
+.warning-ack span { display: grid; gap: 4px; }
+.warning-ack small { color: #7c6840; font-size: 10px; }
+
+.import-callout {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.import-callout.error { background: #fff0f2; color: #9d2b39; }
+.import-callout.warning { background: #fff8e7; color: #8c630d; }
+.import-callout.success { background: #eaf8f3; color: #147356; }
+
+.issue-filters {
+  display: grid;
+  grid-template-columns: 190px minmax(230px, 1fr);
+  gap: 8px;
+  margin-bottom: 11px;
+}
+
+.issue-filters select,
+.issue-filters input {
+  height: 38px;
+  border: 1px solid #d9e2ed;
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #fff;
+  color: #344a65;
+}
+
+.issue-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 13px;
+}
+
+.issue-pagination span { color: #64768c; font-size: 10px; }
+.status-applied { background: #1d9b75; box-shadow: 0 0 0 4px #dff5ed; }
+.status-has_errors,
+.status-technical_error,
+.status-stale_validation { background: #cf4453; box-shadow: 0 0 0 4px #fde7e9; }
+
+@media (max-width: 650px) {
+  .import-summary { grid-template-columns: repeat(2, 1fr); }
+  .issue-filters { grid-template-columns: 1fr; }
+  .import-status-line { align-items: flex-start; flex-direction: column; }
+}
