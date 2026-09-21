@@ -8,7 +8,7 @@ function formatSafely(value, options, dateOnly = false) {
   if (Number.isNaN(date.getTime())) return '—'
   return new Intl.DateTimeFormat('ru-RU', options).format(date)
 }
-export const formatDate = (value) => formatSafely(value, undefined, true)
+export const formatDate = (value) => formatSafely(value, undefined, /^\d{4}-\d{2}-\d{2}$/.test(String(value)))
 export const formatDateTime = (value, timeZone) => formatSafely(value, { dateStyle: 'short', timeStyle: 'short', ...(timeZone ? { timeZone } : {}) })
 export const formatTime = (value, timeZone) => {
   if (!value) return '—'
