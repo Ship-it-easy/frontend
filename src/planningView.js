@@ -1,7 +1,7 @@
 export function matchesPlanningFilters(job, filters) {
   const query = filters.search.trim().toLocaleLowerCase('ru-RU')
   if (query && !`${job.address || ''} ${job.work_type || ''}`.toLocaleLowerCase('ru-RU').includes(query)) return false
-  if (filters.priority && job.priority_type !== filters.priority) return false
+  if (filters.priority && job.priority !== filters.priority) return false
   if (filters.status && job.status !== filters.status) return false
   if (filters.outcome === 'ASSIGNED' && job.outcome !== 'ASSIGNED') return false
   if (filters.outcome === 'UNASSIGNED_TODAY' && job.outcome !== 'UNASSIGNED_TODAY') return false

@@ -16,6 +16,8 @@ export const formatTime = (value, timeZone) => {
   if (text.includes('T')) return formatSafely(value, { hour: '2-digit', minute: '2-digit', ...(timeZone ? { timeZone } : {}) })
   return text.slice(0, 5)
 }
+export const priorityLabels = { CRITICAL: 'Критичный', HIGH: 'Высокий', MEDIUM: 'Средний', LOW: 'Низкий' }
+export const formatPriority = (value) => priorityLabels[value] || priorityLabels.LOW
 
 const icons = { jobs: '▤', planning: '⌁', engineers: '♙', catalogs: '▦', projects: '▣', owners: '♙', today: '◎', future: '→', history: '✓', logout: '↗', close: '×', back: '←', plus: '+', settings: '⚙', refresh: '↻', search: '⌕', map: '◇', account: '○', chevron: '›', menu: '☰' }
 export function Icon({ name }) { return <span className={`icon icon-${name}`} aria-hidden="true">{icons[name] || '•'}</span> }
