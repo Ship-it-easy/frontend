@@ -13,6 +13,19 @@ export function selectPlanningDate(days, preferredDate, projectDate) {
   return dates.includes(preferredDate) ? preferredDate : projectDate
 }
 
+export function planningDaySummary(item, selectedDate, selectedDay) {
+  const assigned = Number(item?.assigned_count || 0)
+  if (item?.date === selectedDate && selectedDay?.unassigned) {
+    return {
+      assigned,
+      moved: Array.isArray(selectedDay.unassigned.moved) ? selectedDay.unassigned.moved.length : 0,
+      horizon: Array.isArray(selectedDay.unassigned.horizon) ? selectedDay.unassigned.horizon.length : 0,
+      unassignedToday: null,
+    }
+  }
+  return { assigned, moved: null, horizon: null, unassignedToday: Number(item?.unassigned_count || 0) }
+}
+
 export function readinessTarget(section, ownerMode) {
   return ownerMode && ['catalogs', 'parameters'].includes(section) ? 'projects' : section
 }

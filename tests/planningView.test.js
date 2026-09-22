@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { matchesPlanningFilters, readinessTarget, selectPlanningDate } from '../src/planningView.js'
+import { matchesPlanningFilters, planningDaySummary, readinessTarget, selectPlanningDate } from '../src/planningView.js'
 
 const job = {
   address: 'Пермь, улица Ленина, 1',
@@ -21,6 +21,24 @@ test('selected day is preserved only inside the current seven-day range', () => 
   const days = [{ date: '2026-09-19' }, { date: '2026-09-20' }]
   assert.equal(selectPlanningDate(days, '2026-09-20', '2026-09-19'), '2026-09-20')
   assert.equal(selectPlanningDate(days, '2026-09-30', '2026-09-19'), '2026-09-19')
+})
+
+test('selected day separates moved jobs from jobs unassigned in the horizon', () => {
+  const item = { date: '2026-09-22', assigned_count: 25, unassigned_count: 31 }
+  const day = { unassigned: { moved: Array(26).fill({}), horizon: Array(5).fill({}) } }
+
+  assert.deepEqual(planningDaySummary(item, item.date, day), {
+    assigned: 25,
+    moved: 26,
+    horizon: 5,
+    unassignedToday: null,
+  })
+  assert.deepEqual(planningDaySummary(item, '2026-09-23', day), {
+    assigned: 25,
+    moved: null,
+    horizon: null,
+    unassignedToday: 31,
+  })
 })
 
 test('owner readiness sends unavailable settings to project management', () => {

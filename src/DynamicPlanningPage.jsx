@@ -1,7 +1,7 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
 import PlanningConfig from './PlanningConfig.jsx'
-import { matchesPlanningFilters, readinessTarget, selectPlanningDate } from './planningView.js'
+import { matchesPlanningFilters, planningDaySummary, readinessTarget, selectPlanningDate } from './planningView.js'
 import { Badge, Button, Empty, PageHeader, formatDate, formatDateTime, formatTime } from './ui.jsx'
 
 const RoutesMap = React.lazy(() => import('./RoutesMap.jsx'))
@@ -36,19 +36,28 @@ function RunBanner({ run, hasPlan, onRetry, timeZone }) {
   return <section className="board-run-progress"><div><span className="spinner" /><div><b>{run.phase || 'Подготовка данных'}</b><span>Запущено {formatDateTime(run.started_at, timeZone)}{hasPlan ? ' · Показан предыдущий план до завершения расчёта' : ''}</span></div></div><i /></section>
 }
 
-function DateStrip({ days, selected, today, onSelect }) {
-  return <div className="planning-date-strip" role="tablist" aria-label="Дни планирования">{safeArray(days).map((item) => <button key={item.date} role="tab" aria-selected={selected === item.date} className={selected === item.date ? 'selected' : ''} onClick={() => onSelect(item.date)}>
-    <span>{weekday(item.date)}{item.date === today && <em>Сегодня</em>}</span><strong>{dayMonth(item.date)}</strong><small><b>{item.assigned_count}</b> назначено · <b>{item.unassigned_count}</b> не назначено</small>{item.cancelled_count > 0 && <small className="cancel-count">{item.cancelled_count} отменено</small>}
-  </button>)}</div>
+function DateStrip({ days, selected, selectedDay, today, onSelect }) {
+  return <div className="planning-date-strip" role="tablist" aria-label="Дни планирования">{safeArray(days).map((item) => {
+    const counts = planningDaySummary(item, selected, selectedDay)
+    return <button key={item.date} role="tab" aria-selected={selected === item.date} className={selected === item.date ? 'selected' : ''} onClick={() => onSelect(item.date)}>
+      <span>{weekday(item.date)}{item.date === today && <em>Сегодня</em>}</span><strong>{dayMonth(item.date)}</strong>
+      {counts.moved == null
+        ? <small><b>{counts.assigned}</b> назначено · <b>{counts.unassignedToday}</b> не на этот день</small>
+        : <><small><b>{counts.assigned}</b> назначено · <b>{counts.moved}</b> перенесено</small><small><b>{counts.horizon}</b> без назначения в горизонте</small></>}
+      {item.cancelled_count > 0 && <small className="cancel-count">{item.cancelled_count} отменено</small>}
+    </button>
+  })}</div>
 }
 
 function ResultContext({ version, timeZone }) {
   if (!version) return null
-  return <section className="plan-context"><div><span>Последняя публикация</span><b>{formatDateTime(version.published_at, timeZone)}</b></div><div><span>Причина запуска</span><b>{triggerLabels[version.trigger] || version.trigger}</b></div>{version.initiator && <div><span>Инициатор</span><b>{version.initiator}</b></div>}<div><span>Версия плана</span><b>Версия {version.number}</b></div><div><span>Статус</span><b>{resultLabels[version.status] || version.status}</b></div></section>
+  const publicationStatus = version.status === 'FEASIBLE_TIME_LIMIT' ? 'SUCCESS' : version.status
+  const optimizationLimited = version.optimization_limited || version.status === 'FEASIBLE_TIME_LIMIT'
+  return <section className="plan-context"><div><span>Последняя публикация</span><b>{formatDateTime(version.published_at, timeZone)}</b></div><div><span>Причина запуска</span><b>{triggerLabels[version.trigger] || version.trigger}</b></div>{version.initiator && <div><span>Инициатор</span><b>{version.initiator}</b></div>}<div><span>Версия плана</span><b>Версия {version.number}</b></div><div><span>Статус</span><b>{resultLabels[publicationStatus] || publicationStatus}</b></div>{optimizationLimited && <div><span>Оптимизация</span><b>Допустимый план, оптимальность не доказана</b></div>}</section>
 }
 
 function JobCard({ job, onOpen, cancelled = false, timeZone }) {
-  const action = job.outcome === 'UNASSIGNED_TODAY' ? 'Почему не назначена' : cancelled ? 'Подробнее' : 'Почему назначена'
+  const action = job.outcome === 'UNASSIGNED_TODAY' ? job.later_assignment_date ? 'Почему перенесена' : 'Почему не назначена' : cancelled ? 'Подробнее' : 'Почему назначена'
   return <button type="button" className={`route-job-card ${cancelled ? 'cancelled' : ''} ${job.overdue ? 'overdue' : ''}`} onClick={(event) => onOpen(job, event.currentTarget)}>
     <header>{job.route_position && <span className="route-position">{job.route_position}</span>}<Badge status={job.status}>{statusLabels[job.status] || job.status}</Badge>{job.priority_type === 'EMERGENCY' && <span className="emergency-label">Авария</span>}</header>
     {!cancelled && job.planned_start && <div className="job-time">{formatTime(job.planned_start, timeZone)}–{formatTime(job.planned_end, timeZone)}</div>}
@@ -85,7 +94,7 @@ function EngineerColumn({ column, filterJob, onOpen, timeZone }) {
 function UnassignedColumn({ value, filterJob, onOpen, timeZone }) {
   const moved = safeArray(value?.moved).filter(filterJob)
   const horizon = safeArray(value?.horizon).filter(filterJob)
-  return <section className="route-column unassigned-column" aria-labelledby="unassigned-title"><header className="route-column-head"><div><h2 id="unassigned-title">Неназначенные заявки</h2></div><span>Результат выбранного дня</span><small>{pluralJobs(moved.length + horizon.length)}</small></header><div className="route-column-body">
+  return <section className="route-column unassigned-column" aria-labelledby="unassigned-title"><header className="route-column-head"><div><h2 id="unassigned-title">Перенесённые и неназначенные</h2></div><span>Результат выбранного дня</span><small>{pluralJobs(moved.length + horizon.length)}</small></header><div className="route-column-body">
     <div className="unassigned-group"><h3>Перенесены <span>{moved.length}</span></h3>{moved.length ? moved.map((job) => <JobCard key={job.job_id} job={job} onOpen={onOpen} timeZone={timeZone} />) : <p>Нет перенесённых заявок</p>}</div>
     <div className="unassigned-group"><h3>Не назначены в горизонте <span>{horizon.length}</span></h3>{horizon.length ? horizon.map((job) => <JobCard key={job.job_id} job={job} onOpen={onOpen} timeZone={timeZone} />) : <p>Нет неназначенных заявок</p>}</div>
   </div></section>
@@ -109,7 +118,7 @@ function ExplanationDrawer({ value, loading, updated, onClose, returnFocus, time
     return () => { window.removeEventListener('keydown', keydown); returnFocus?.focus() }
   }, [onClose, returnFocus])
   const job = value?.job
-  const title = job?.outcome === 'UNASSIGNED_TODAY' ? 'Почему не назначена' : job?.outcome === 'CANCELLED' ? 'Сведения об отмене' : 'Почему назначена'
+  const title = job?.outcome === 'UNASSIGNED_TODAY' ? job?.later_assignment_date ? 'Почему перенесена' : 'Почему не назначена' : job?.outcome === 'CANCELLED' ? 'Сведения об отмене' : 'Почему назначена'
   return <div className="explanation-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside ref={drawerRef} className="explanation-drawer" role="dialog" aria-modal="true" aria-labelledby="explanation-title"><header><div><span>Объяснение решения</span><h2 id="explanation-title">{title}</h2></div><button ref={closeRef} aria-label="Закрыть" onClick={onClose}>×</button></header>{updated && <div className="drawer-updated">План обновлён</div>}{loading ? <div className="drawer-loading">Загружаем сохранённое объяснение…</div> : value && job ? <div className="drawer-content">
     {job.current_data_changed && <div className="drawer-updated">Текущие данные заявки отличаются от данных, использованных в этом расчёте.</div>}
     <section className="drawer-job"><Badge status={job.status}>{statusLabels[job.status] || job.status}</Badge><h3>{job.address || 'Адрес не сохранён'}</h3><p>{job.work_type || 'Тип работ не сохранён'} · {job.duration_min ?? '—'} мин · SLA {formatDate(job.sla_date)}</p></section>
@@ -221,17 +230,17 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
   const filtered = filters.search || filters.priority || filters.status || filters.outcome !== 'ALL'
   const activeRun = board?.active_run
   const calculating = activeStates.has(activeRun?.state)
+  const permanentlyUnassigned = Number(board?.plan_version?.unassigned_count || 0)
 
   return <>
     <PageHeader eyebrow="Маршруты на семь дней" title="Планирование" subtitle="Актуальный опубликованный план и объяснение каждого результата." actions={<><PlanningConfig notify={notify} endpoint={ownerMode ? `/api/projects/${projectId}/planning-config` : '/api/project/planning-config'} /><Button icon="refresh" disabled={loading || !board || busy || calculating || board?.readiness?.ready === false} onClick={calculate}>{calculating ? 'Расчёт выполняется' : 'Рассчитать маршруты'}</Button><Readiness value={board?.readiness} onNavigate={(section) => onNavigate?.(readinessTarget(section, ownerMode))} /></>} />
     <RunBanner run={activeRun} hasPlan={!!board?.plan_version} onRetry={calculate} timeZone={board?.timezone} />
-    {board?.plan_version?.status === 'PARTIAL' && <section className="board-alert warning"><div><b>Часть заявок не назначена</b><span>Валидная часть плана опубликована; причины находятся в последней колонке.</span></div></section>}
-    {board?.plan_version?.status === 'FEASIBLE_TIME_LIMIT' && <section className="board-alert warning"><div><b>Найден допустимый план, оптимальность не доказана</b><span>Расчёт завершён по лимиту времени.</span></div></section>}
+    {board?.plan_version?.status === 'PARTIAL' && <section className="board-alert warning"><div><b>{permanentlyUnassigned ? `${pluralJobs(permanentlyUnassigned)} не удалось назначить в горизонте` : 'Часть заявок не назначена'}</b><span>Валидная часть плана опубликована; конкретные причины указаны в последней колонке.</span></div></section>}
     {loading ? <div className="board-loading"><span className="spinner" /> Загружаем актуальный план…</div> : <>
-      <DateStrip days={board?.days} selected={selectedDate} today={board?.project_date} onSelect={selectDate} />
+      <DateStrip days={board?.days} selected={selectedDate} selectedDay={day} today={board?.project_date} onSelect={selectDate} />
       <ResultContext version={board?.plan_version} timeZone={board?.timezone} />
       {!board?.plan_version ? <Empty title="План ещё не рассчитан" text={board?.readiness?.ready === false ? 'Подготовьте обязательные данные, затем запустите расчёт.' : 'Нажмите «Рассчитать маршруты», чтобы опубликовать первый план.'} action={board?.readiness?.ready !== false && <Button onClick={calculate}>Рассчитать маршруты</Button>} /> : <>
-        <section className="board-filters"><label className="board-search"><span>⌕</span><input aria-label="Поиск по адресу и типу работ" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Адрес или тип работ" /></label><select aria-label="Приоритет" value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}><option value="">Обычная / Авария</option><option value="NORMAL">Обычная</option><option value="EMERGENCY">Авария</option></select><select aria-label="Статус заявки" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Все статусы</option>{safeArray(day?.available_filters?.statuses).map((status) => <option key={status} value={status}>{statusLabels[status] || status}</option>)}</select><select aria-label="Результат" value={filters.outcome} onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}><option value="ALL">Все</option><option value="ASSIGNED">Назначенные</option><option value="UNASSIGNED_TODAY">Неназначенные</option></select>{filtered && <span className="shown-count">Показано {visibleCount} из {allCards.length}</span>}</section>
+        <section className="board-filters"><label className="board-search"><span>⌕</span><input aria-label="Поиск по адресу и типу работ" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Адрес или тип работ" /></label><select aria-label="Приоритет" value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}><option value="">Обычная / Авария</option><option value="NORMAL">Обычная</option><option value="EMERGENCY">Авария</option></select><select aria-label="Статус заявки" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Все статусы</option>{safeArray(day?.available_filters?.statuses).map((status) => <option key={status} value={status}>{statusLabels[status] || status}</option>)}</select><select aria-label="Результат" value={filters.outcome} onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}><option value="ALL">Все</option><option value="ASSIGNED">Назначенные</option><option value="UNASSIGNED_TODAY">Перенесённые и неназначенные</option></select>{filtered && <span className="shown-count">Показано {visibleCount} из {allCards.length}</span>}</section>
         {!day ? <div className="board-loading"><span className="spinner" /> Загружаем день…</div> : !day.result_available ? <Empty title="Для этой даты нет результата расчёта" text="Дата не рассчитывалась в актуальной версии плана." /> : <><Suspense fallback={<div className="map-loading"><span className="spinner" /> Загружаем карту…</div>}><RoutesMap day={day} planningDate={selectedDate} timeZone={board?.timezone} /></Suspense><div className="route-board"><div className="route-board-scroll">{safeArray(day.engineer_columns).map((column) => <EngineerColumn key={column.engineer_id} column={column} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} />)}<UnassignedColumn value={day.unassigned} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} /></div></div></>}
       </>}
     </>}
