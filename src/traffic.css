@@ -1,0 +1,36 @@
+.traffic-forecast{margin:20px 0;padding:20px;border:1px solid #dbe5ee;border-radius:14px;background:#f7faff}
+.traffic-forecast>header{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.traffic-forecast h3{margin:5px 0 0;font-size:19px;color:#17304b;letter-spacing:-.4px}
+.traffic-forecast .eyebrow{font-size:10px;color:#527087}
+.traffic-model-label{white-space:nowrap;background:#e8eef7;border:1px solid #d5dfed;color:#405c80;padding:6px 9px;border-radius:20px;font-size:10px}
+.traffic-accuracy-note{margin:12px 0 16px!important;max-width:950px;color:#697b8d!important;font-size:11px!important;line-height:1.65}
+.traffic-route-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,390px),1fr));gap:14px;align-items:start}
+.traffic-route-card{padding:17px;border:1px solid #e0e7ee;border-radius:11px;background:#fff;box-shadow:0 3px 10px #183b5610}
+.traffic-route-card>header{display:flex;align-items:center;gap:8px;margin-bottom:17px!important}
+.traffic-route-card>header b{font-size:13px}.traffic-route-card>header small{margin-left:auto;color:#6b7b8c;font-size:10px}
+.traffic-engineer-dot{height:9px;width:9px;border-radius:50%}
+.traffic-route-metrics{display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:10px;margin-bottom:14px}
+.traffic-route-metrics>div{display:grid;gap:6px}.traffic-route-metrics small{font-size:10px;color:#6b7b8c;line-height:1.5}
+.traffic-route-metrics strong{font-size:24px;color:#17304b;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.traffic-route-metrics em{font-size:11px;font-style:normal;font-weight:500;color:#6b7b8c}
+.traffic-route-breakdown{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 13px}
+.traffic-route-breakdown>span{background:#f0f5fa;border-radius:5px;padding:5px 6px;font-size:9px;color:#50677e}
+.traffic-route-error,.traffic-late-note{padding:9px 10px!important;border-radius:6px;background:#fff2e3;color:#905110!important;font-size:11px!important;line-height:1.5}
+.traffic-route-details{border-top:1px solid #e5ecf2;padding-top:11px}
+.traffic-route-details>summary{display:flex;justify-content:space-between;gap:10px;cursor:pointer;font-size:11px;color:#1768ac;font-weight:700}
+.traffic-route-details>summary span{font-size:10px;color:#6b7b8c;font-weight:500}
+.traffic-itinerary{list-style:none;padding:0;margin:16px 0}
+.traffic-itinerary li{display:flex;gap:10px;padding:0 0 17px;position:relative}
+.traffic-itinerary li:not(:last-child):before{content:'';position:absolute;left:12px;top:25px;bottom:1px;border-left:1px solid #d9e3ed}
+.traffic-stop-number{flex:0 0 25px;display:grid;place-items:center;height:25px;border-radius:50%;font-size:10px;font-weight:700;color:#1b6aaf;background:#eaf3fb}
+.traffic-itinerary b{font-size:11px;line-height:1.5}.traffic-itinerary p{margin:4px 0!important;font-size:10px!important;color:#4b6279!important}.traffic-itinerary p strong{margin-left:8px;color:#1e639b}.traffic-itinerary small{font-size:9px;color:#7a8999}
+.departure-comparison{padding-top:13px;border-top:1px solid #e5ecf2}
+.departure-comparison-title{display:flex;justify-content:space-between;gap:8px;font-size:11px}.departure-comparison-title span{font-size:9px;color:#7a8999}
+.departure-bars{height:100px;display:grid;grid-template-columns:repeat(13,minmax(0,1fr));align-items:end;gap:3px;margin-top:10px}
+.departure-bars button{border:0;background:transparent;padding:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;cursor:pointer;min-width:0;color:#557087}
+.departure-bars button:hover{background:#eaf3fb;border-radius:4px}.departure-bars button:focus-visible{outline:2px solid #1478e8;border-radius:4px}
+.departure-bars i{display:block;width:80%;background:#4c98d1;border-radius:3px 3px 0 0}.departure-bars i.late{background:#d99a49}
+.departure-bar-value{font-size:9px;font-variant-numeric:tabular-nums}.departure-bars small{font-size:8px;white-space:nowrap}
+.departure-comparison>small,.traffic-detail-note{display:block;font-size:9px!important;line-height:1.6;color:#7a8999!important;margin-top:11px!important}
+.traffic-controls input[type=number]{width:55px;padding:6px;border:1px solid #cbd5e1;border-radius:6px}.traffic-controls button{padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;background:white;color:#315777;cursor:pointer}
+@media(max-width:600px){.traffic-forecast{padding:12px}.traffic-forecast>header{align-items:flex-start;flex-direction:column}.traffic-route-metrics strong{font-size:20px}.traffic-route-card{padding:13px}.traffic-route-metrics{gap:7px}}
