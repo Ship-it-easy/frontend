@@ -132,7 +132,7 @@ function ExplanationDrawer({ value, loading, updated, onClose, returnFocus, time
 }
 
 export default function DynamicPlanningPage({ projectId, notify, ownerMode = false, onNavigate }) {
-  const base = ownerMode ? `/api/projects/${projectId}/planning` : '/api/project/planning'
+  const base = projectId ? `/api/projects/${projectId}/planning` : '/api/project/planning'
   const [board, setBoard] = useState(null)
   const [day, setDay] = useState(null)
   const [selectedDate, setSelectedDate] = useState('')
@@ -233,7 +233,7 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
   const permanentlyUnassigned = Number(board?.plan_version?.unassigned_count || 0)
 
   return <>
-    <PageHeader eyebrow="Маршруты на семь дней" title="Планирование" subtitle="Актуальный опубликованный план и объяснение каждого результата." actions={<><PlanningConfig notify={notify} endpoint={ownerMode ? `/api/projects/${projectId}/planning-config` : '/api/project/planning-config'} /><Button icon="refresh" disabled={loading || !board || busy || calculating || board?.readiness?.ready === false} onClick={calculate}>{calculating ? 'Расчёт выполняется' : 'Рассчитать маршруты'}</Button><Readiness value={board?.readiness} onNavigate={(section) => onNavigate?.(readinessTarget(section, ownerMode))} /></>} />
+    <PageHeader eyebrow="Маршруты на семь дней" title="Планирование" subtitle="Актуальный опубликованный план и объяснение каждого результата." actions={<><PlanningConfig notify={notify} endpoint={projectId ? `/api/projects/${projectId}/planning-config` : '/api/project/planning-config'} /><Button icon="refresh" disabled={loading || !board || busy || calculating || board?.readiness?.ready === false} onClick={calculate}>{calculating ? 'Расчёт выполняется' : 'Рассчитать маршруты'}</Button><Readiness value={board?.readiness} onNavigate={(section) => onNavigate?.(readinessTarget(section, ownerMode))} /></>} />
     <RunBanner run={activeRun} hasPlan={!!board?.plan_version} onRetry={calculate} timeZone={board?.timezone} />
     {board?.plan_version?.status === 'PARTIAL' && <section className="board-alert warning"><div><b>{permanentlyUnassigned ? `${pluralJobs(permanentlyUnassigned)} не удалось назначить в горизонте` : 'Часть заявок не назначена'}</b><span>Валидная часть плана опубликована; конкретные причины указаны в последней колонке.</span></div></section>}
     {loading ? <div className="board-loading"><span className="spinner" /> Загружаем актуальный план…</div> : <>
