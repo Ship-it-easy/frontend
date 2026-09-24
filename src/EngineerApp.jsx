@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
-import { Badge, Button, Empty, Icon, Modal, PageHeader, Shell, Toast, formatDate, formatDateTime, formatTime } from './ui.jsx'
+import { Badge, Button, Empty, Icon, Modal, PageHeader, Shell, Toast, formatDate, formatDateTime, formatPriority, formatTime } from './ui.jsx'
 
 const nav = [
   { id: 'today', label: 'Сегодня', icon: 'today' },
@@ -32,7 +32,7 @@ function RouteChanges({ version, changes }) {
 }
 
 function Assignment({ item, onOpen }) {
-  return <button className="assignment-card" onClick={() => onOpen(item)}><div className="assignment-sequence">{item.sequence}</div><div className="assignment-main"><header><b>{item.work_type_name}</b><span className="tag-row">{item.priority_type === 'EMERGENCY' && <Badge status="EMERGENCY">Аварийная</Badge>}<Badge status={item.job_status}>{labels[item.job_status]}</Badge></span></header><p><Icon name="map" />{item.address}</p><footer><span>{formatTime(item.planned_start)}–{formatTime(item.planned_finish)}</span><span>{item.service_duration_min} мин</span><span>{formatDate(item.planning_date)}</span></footer></div><Icon name="chevron" /></button>
+  return <button className="assignment-card" onClick={() => onOpen(item)}><div className="assignment-sequence">{item.sequence}</div><div className="assignment-main"><header><b>{item.work_type_name}</b><span className="tag-row"><Badge status={item.priority}>{formatPriority(item.priority)}</Badge><Badge status={item.job_status}>{labels[item.job_status]}</Badge></span></header><p><Icon name="map" />{item.address}</p><footer><span>{formatTime(item.planned_start)}–{formatTime(item.planned_finish)}</span><span>{item.service_duration_min} мин</span><span>{formatDate(item.planning_date)}</span></footer></div><Icon name="chevron" /></button>
 }
 
 function AssignmentDetails({ item, onClose, onChanged, notify }) {
@@ -40,7 +40,7 @@ function AssignmentDetails({ item, onClose, onChanged, notify }) {
     try { await api(`/api/engineer/assignments/${item.id}/${name}`, { method: 'POST' }); notify(message); onChanged(); onClose() }
     catch (error) { notify(error.message, 'error') }
   }
-  return <Modal title={item.work_type_name} subtitle={`Заявка #${item.job_id}`} onClose={onClose}><div className="engineer-detail">{item.priority_type === 'EMERGENCY' && <Badge status="EMERGENCY">Аварийная заявка</Badge>}<div className="route-time"><span>{formatTime(item.planned_start)}</span><i /><span>{formatTime(item.planned_finish)}</span></div><div className="address-block"><Icon name="map" /><div><small>Адрес</small><b>{item.address}</b></div></div><div className="detail-grid"><div><small>Дата</small><b>{formatDate(item.planning_date)}</b></div><div><small>Длительность</small><b>{item.service_duration_min} мин</b></div><div><small>Окно клиента</small><b>{item.time_window_start ? `${formatTime(item.time_window_start)}–${formatTime(item.time_window_end)}` : 'В течение смены'}</b></div><div><small>Крайний срок</small><b>{formatDate(item.sla_date)}</b></div></div></div><div className="engineer-actions">{item.job_status === 'NEW' && <Button className="wide" onClick={() => action('start', 'Работа начата')}>Начать работу</Button>}{item.job_status === 'IN_PROGRESS' && <><Button className="wide" onClick={() => action('complete', 'Работа завершена')}>Завершить</Button><Button className="wide" kind="secondary" onClick={() => action('return-to-new', 'Заявка возвращена в новые')}>Вернуть в новые</Button></>}</div></Modal>
+  return <Modal title={item.work_type_name} subtitle={`Заявка #${item.job_id}`} onClose={onClose}><div className="engineer-detail"><Badge status={item.priority}>{formatPriority(item.priority)} приоритет</Badge><div className="route-time"><span>{formatTime(item.planned_start)}</span><i /><span>{formatTime(item.planned_finish)}</span></div><div className="address-block"><Icon name="map" /><div><small>Адрес</small><b>{item.address}</b></div></div><div className="detail-grid"><div><small>Дата</small><b>{formatDate(item.planning_date)}</b></div><div><small>Длительность</small><b>{item.service_duration_min} мин</b></div><div><small>Окно клиента</small><b>{item.time_window_start ? `${formatTime(item.time_window_start)}–${formatTime(item.time_window_end)}` : 'В течение смены'}</b></div><div><small>Крайний срок</small><b>{formatDate(item.sla_date)}</b></div></div></div><div className="engineer-actions">{item.job_status === 'NEW' && <Button className="wide" onClick={() => action('start', 'Работа начата')}>Начать работу</Button>}{item.job_status === 'IN_PROGRESS' && <><Button className="wide" onClick={() => action('complete', 'Работа завершена')}>Завершить</Button><Button className="wide" kind="secondary" onClick={() => action('return-to-new', 'Заявка возвращена в новые')}>Вернуть в новые</Button></>}</div></Modal>
 }
 
 export default function EngineerApp({ user, onLogout }) {

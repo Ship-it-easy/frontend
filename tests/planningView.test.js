@@ -6,13 +6,13 @@ import { matchesPlanningFilters, planningDaySummary, readinessTarget, selectPlan
 const job = {
   address: 'Пермь, улица Ленина, 1',
   work_type: 'Диагностика',
-  priority_type: 'EMERGENCY',
+  priority: 'CRITICAL',
   status: 'NEW',
   outcome: 'UNASSIGNED_TODAY',
 }
 
 test('planning filters combine search, priority, status and outcome', () => {
-  assert.equal(matchesPlanningFilters(job, { search: 'ленина', priority: 'EMERGENCY', status: 'NEW', outcome: 'UNASSIGNED_TODAY' }), true)
+  assert.equal(matchesPlanningFilters(job, { search: 'ленина', priority: 'CRITICAL', status: 'NEW', outcome: 'UNASSIGNED_TODAY' }), true)
   assert.equal(matchesPlanningFilters(job, { search: 'монтаж', priority: '', status: '', outcome: 'ALL' }), false)
   assert.equal(matchesPlanningFilters(job, { search: '', priority: '', status: '', outcome: 'ASSIGNED' }), false)
 })

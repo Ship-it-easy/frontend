@@ -33,7 +33,7 @@ const ISSUE_HELP = {
   INVALID_FILE_TYPE: 'Выберите файл с расширением CSV.',
   FILE_TOO_LARGE: 'Уменьшите файл до 10 МБ.',
   FILE_ALREADY_APPLIED: 'Этот файл уже был успешно применён.',
-  PROJECT_BLOCKED: 'Разблокируйте проект перед повторной проверкой.',
+  PROJECT_BLOCKED: 'Разблокируйте участок перед повторной проверкой.',
   UNSUPPORTED_ENCODING: 'Сохраните файл в UTF-8 или Windows-1251.',
   UNDETERMINED_DELIMITER: 'Используйте единый разделитель: точку с запятой или запятую.',
   MALFORMED_CSV: 'Проверьте кавычки и одинаковое количество колонок.',
@@ -45,7 +45,7 @@ const ISSUE_HELP = {
   INVALID_DATETIME: 'Используйте DD.MM.YYYY ЧЧ:ММ или YYYY-MM-DD ЧЧ:ММ.',
   DATE_MISMATCH: 'Начало и окончание должны быть в одной календарной дате.',
   INVALID_TIME_WINDOW: 'Окончание должно быть позже начала.',
-  UNKNOWN_WORK_TYPE: 'Добавьте тип работ в справочник проекта или исправьте название.',
+  UNKNOWN_WORK_TYPE: 'Добавьте тип работ в справочник участка или исправьте название.',
   AMBIGUOUS_WORK_TYPE: 'Устраните дубли названия в справочнике типов работ.',
   INACTIVE_WORK_TYPE: 'Активируйте тип работ или укажите другой.',
   ADDRESS_NOT_FOUND: 'Уточните населённый пункт, улицу и дом.',
@@ -257,7 +257,7 @@ export default function JobImports({ projectId, projectLabel, notify, onOpenJobs
         <div>
           <span className="eyebrow">Пакет #{batch.id}</span>
           <h2>{batch.original_filename || 'CSV-файл'}</h2>
-          <p>{batch.project_name || projectLabel || `Проект #${projectId}`} · {batch.created_by_name || batch.created_by || '—'} · {dateTime(batch.created_at)}</p>
+          <p>{batch.project_name || projectLabel || `Участок #${projectId}`} · {batch.created_by_name || batch.created_by || '—'} · {dateTime(batch.created_at)}</p>
         </div>
         <div className="import-detail-actions">
           {REVALIDATABLE_STATUSES.has(batch.status) && <Button kind="secondary" disabled={busy} onClick={revalidate}>Повторить проверку</Button>}
@@ -297,7 +297,7 @@ export default function JobImports({ projectId, projectLabel, notify, onOpenJobs
 
       <section className={`import-history-card ${historyOpen ? 'open' : 'collapsed'}`}>
         <button className="history-toggle" onClick={() => setHistoryOpen(!historyOpen)}><span><span className="eyebrow">Журнал операций</span><b>История импортов</b></span><span className="history-count">{history.length}</span><span className="import-chevron">{historyOpen ? '⌃' : '⌄'}</span></button>
-        {historyOpen && (history.length ? <div className="import-history-list">{history.map((item) => <button className={`import-history-item ${batch?.id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => open(item)}><span className={`import-status-dot status-${String(item.status).toLowerCase()}`} /><span className="import-history-main"><b>{item.original_filename || `Пакет #${item.id}`}</b><small>Заявки CSV · {item.project_name || projectLabel || `Проект #${item.project_id}`}</small><small>{item.created_by_name || item.created_by || '—'} · {dateTime(item.created_at)}</small></span><span className="import-history-meta"><Badge status={item.status}>{STATUS_TEXT[item.status] || item.status}</Badge><small>{item.total_rows || 0} строк · {item.error_count || 0} ошибок · {item.warning_count || 0} предупреждений</small><small>{item.created_count || 0} создано</small></span><span className="import-chevron">›</span></button>)}</div> : <Empty title="История пока пуста" text="После первой загрузки здесь появятся сохранённые пакеты." />)}
+        {historyOpen && (history.length ? <div className="import-history-list">{history.map((item) => <button className={`import-history-item ${batch?.id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => open(item)}><span className={`import-status-dot status-${String(item.status).toLowerCase()}`} /><span className="import-history-main"><b>{item.original_filename || `Пакет #${item.id}`}</b><small>Заявки CSV · {item.project_name || projectLabel || `Участок #${item.project_id}`}</small><small>{item.created_by_name || item.created_by || '—'} · {dateTime(item.created_at)}</small></span><span className="import-history-meta"><Badge status={item.status}>{STATUS_TEXT[item.status] || item.status}</Badge><small>{item.total_rows || 0} строк · {item.error_count || 0} ошибок · {item.warning_count || 0} предупреждений</small><small>{item.created_count || 0} создано</small></span><span className="import-chevron">›</span></button>)}</div> : <Empty title="История пока пуста" text="После первой загрузки здесь появятся сохранённые пакеты." />)}
       </section>
     </div>
   </div>
