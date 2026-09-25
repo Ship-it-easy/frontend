@@ -13,6 +13,24 @@ export function coordinatePoint(value) {
   return [Number(value.latitude), Number(value.longitude)]
 }
 
+export function mapBoundsSignature(points) {
+  return [...new Set(safeArray(points)
+    .filter((point) => Array.isArray(point) && point.length >= 2 && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])))
+    .map((point) => `${Number(point[0])},${Number(point[1])}`))]
+    .sort()
+    .join('|')
+}
+
+export function routeGeometrySignature(routes) {
+  return safeArray(routes).map((route) => {
+    const locations = safeArray(route?.locations)
+      .filter(validCoordinate)
+      .map((location) => coordinatePoint(location).join(','))
+      .join(';')
+    return `${route?.engineerId ?? ''}:${route?.transportType || ''}:${locations}`
+  }).sort().join('|')
+}
+
 export function decodePolyline6(encoded) {
   if (typeof encoded !== 'string' || !encoded.length) return []
   let index = 0

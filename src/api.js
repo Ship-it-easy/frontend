@@ -30,6 +30,7 @@ export async function api(path, options = {}) {
   if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   const response = await fetch(`${API_URL}${path}`, {
     credentials: 'include',
+    cache: 'no-store',
     ...options,
     headers,
   })
