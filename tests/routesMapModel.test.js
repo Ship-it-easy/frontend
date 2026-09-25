@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildRoutesMapModel, decodePolyline6, validCoordinate } from '../src/routesMapModel.js'
+import { buildRoutesMapModel, decodePolyline6, mapBoundsSignature, routeGeometrySignature, validCoordinate } from '../src/routesMapModel.js'
 
 test('route map model keeps route order and reports jobs without coordinates', () => {
   const day = {
@@ -42,4 +42,26 @@ test('coordinate validation rejects incomplete and out-of-range values', () => {
 test('polyline6 decoder returns precise route points', () => {
   assert.deepEqual(decodePolyline6('A?@A'), [[0.000001, 0], [0, 0.000001]])
   assert.deepEqual(decodePolyline6('A'), [])
+})
+
+test('map bounds signature changes only when the visible bounds change', () => {
+  const original = [[58.01, 56.23], [58.03, 56.25]]
+  const refreshed = [[58.03, 56.25], [58.01, 56.23], [58.01, 56.23]]
+
+  assert.equal(mapBoundsSignature(original), mapBoundsSignature(refreshed))
+  assert.notEqual(mapBoundsSignature(original), mapBoundsSignature([...original, [58.04, 56.26]]))
+})
+
+test('route geometry signature ignores response identity but tracks route order', () => {
+  const route = {
+    engineerId: 7,
+    transportType: 'CAR',
+    locations: [
+      { latitude: 58.01, longitude: 56.23 },
+      { latitude: 58.03, longitude: 56.25 },
+    ],
+  }
+
+  assert.equal(routeGeometrySignature([route]), routeGeometrySignature([{ ...route, locations: route.locations.map((point) => ({ ...point })) }]))
+  assert.notEqual(routeGeometrySignature([route]), routeGeometrySignature([{ ...route, locations: [...route.locations].reverse() }]))
 })

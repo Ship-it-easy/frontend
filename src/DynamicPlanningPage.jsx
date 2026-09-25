@@ -1,14 +1,14 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
 import PlanningConfig from './PlanningConfig.jsx'
-import { matchesPlanningFilters, planningDaySummary, readinessTarget, selectPlanningDate } from './planningView.js'
+import { buildPlanComparison, matchesPlanningFilters, planChangeExplanation, planChangeTitle, planComparisonCause, planningDaySummary, readinessTarget, selectPlanningDate, unassignedChangeExplanation } from './planningView.js'
 import { Badge, Button, Empty, PageHeader, formatDate, formatDateTime, formatPriority, formatTime, priorityLabels } from './ui.jsx'
 
 const RoutesMap = React.lazy(() => import('./RoutesMap.jsx'))
 const safeArray = (value) => Array.isArray(value) ? value : []
 const activeStates = new Set(['PENDING', 'RUNNING'])
 const statusLabels = { NEW: 'Новая', IN_PROGRESS: 'В работе', COMPLETED: 'Выполнена', CANCELLED: 'Отменена' }
-const triggerLabels = { MANUAL: 'Вручную', NIGHTLY: 'Ночью', JOB_CREATED: 'Новая заявка', IMPORT: 'Импорт заявок', JOB_CANCELLED: 'Отмена заявки', ENGINEER_AVAILABILITY_LOST: 'Изменение доступности инженера', ENGINEER_AVAILABILITY_RESTORED: 'Изменение доступности инженера', COALESCED: 'Несколько изменений' }
+const triggerLabels = { MANUAL: 'Вручную', NIGHTLY: 'Ночью', JOB_CREATED: 'Новая заявка', IMPORT: 'Импорт заявок', JOBS_IMPORTED: 'Импорт заявок', JOB_CANCELLED: 'Отмена заявки', ENGINEER_AVAILABILITY_LOST: 'Изменение доступности инженера', ENGINEER_AVAILABILITY_RESTORED: 'Изменение доступности инженера', COALESCED: 'Несколько изменений' }
 const resultLabels = { SUCCESS: 'Успешный результат', PARTIAL: 'Частичный результат', FEASIBLE_TIME_LIMIT: 'Допустимый план по лимиту времени' }
 
 function emitPlanningEvent(name, detail = {}) {
@@ -18,6 +18,10 @@ function dayDate(value) { return new Date(`${value}T00:00:00`) }
 function weekday(value) { return new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(dayDate(value)).replace('.', '') }
 function dayMonth(value) { return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' }).format(dayDate(value)).replace('.', '') }
 function pluralJobs(value) { return `${value} ${value % 10 === 1 && value % 100 !== 11 ? 'заявка' : value % 10 >= 2 && value % 10 <= 4 && (value % 100 < 10 || value % 100 >= 20) ? 'заявки' : 'заявок'}` }
+function isSingular(value) { return value % 10 === 1 && value % 100 !== 11 }
+function isFew(value) { return value % 10 >= 2 && value % 10 <= 4 && (value % 100 < 10 || value % 100 >= 20) }
+function unchangedAssignmentsLabel(value) { return `Почему ${value} ${isSingular(value) ? 'назначение не изменилось' : `${isFew(value) ? 'назначения' : 'назначений'} не изменились`}` }
+function unchangedUnassignedLabel(value) { return `Почему ${value} ${isSingular(value) ? 'неназначенная заявка не изменилась' : `${isFew(value) ? 'неназначенные заявки' : 'неназначенных заявок'} не изменились`}` }
 
 function Readiness({ value, onNavigate }) {
   const [open, setOpen] = useState(false)
@@ -118,6 +122,7 @@ function ExplanationDrawer({ value, loading, updated, onClose, returnFocus, time
     return () => { window.removeEventListener('keydown', keydown); returnFocus?.focus() }
   }, [onClose, returnFocus])
   const job = value?.job
+  const outcomeReasons = safeArray(value?.outcome_reasons).length ? value.outcome_reasons : job?.primary_reason ? [job.primary_reason] : []
   const title = job?.outcome === 'UNASSIGNED_TODAY' ? job?.later_assignment_date ? 'Почему перенесена' : 'Почему не назначена' : job?.outcome === 'CANCELLED' ? 'Сведения об отмене' : 'Почему назначена'
   return <div className="explanation-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside ref={drawerRef} className="explanation-drawer" role="dialog" aria-modal="true" aria-labelledby="explanation-title"><header><div><span>Объяснение решения</span><h2 id="explanation-title">{title}</h2></div><button ref={closeRef} aria-label="Закрыть" onClick={onClose}>×</button></header>{updated && <div className="drawer-updated">План обновлён</div>}{loading ? <div className="drawer-loading">Загружаем сохранённое объяснение…</div> : value && job ? <div className="drawer-content">
     {job.current_data_changed && <div className="drawer-updated">Текущие данные заявки отличаются от данных, использованных в этом расчёте.</div>}
@@ -126,9 +131,69 @@ function ExplanationDrawer({ value, loading, updated, onClose, returnFocus, time
     {!!safeArray(value.eligibility).length && <section><h3>Допустимость</h3><ul className="check-list">{value.eligibility.map((item) => <li key={item.code}><span>✓</span>{item.text}</li>)}</ul></section>}
     {!!safeArray(value.priority_factors).length && <section><h3>Факторы приоритета</h3>{value.priority_factors.map((item) => <p className="explanation-factor" key={item.code}>{item.text}</p>)}</section>}
     {(Number(value.route_factors?.travel_from_previous_min) > 0 || Number(value.route_factors?.distance_from_previous_meters) > 0) && <section><h3>Маршрутные факторы</h3><p className="explanation-factor">{Number(value.route_factors?.travel_from_previous_min) > 0 ? `Добавлено ${value.route_factors.travel_from_previous_min} мин пути` : 'Сохранено расстояние от предыдущей точки'}{Number(value.route_factors?.distance_from_previous_meters) > 0 ? ` · ${value.route_factors.distance_from_previous_meters} м` : ''}</p></section>}
-    <section><h3>Результат оптимизации</h3>{safeArray(value.outcome_reasons).map((item) => <p className="outcome-reason" key={item.code}>{item.text}</p>)}</section>
+    <section><h3>Результат оптимизации</h3>{outcomeReasons.map((item) => <p className="outcome-reason" key={item.code}>{item.text}</p>)}</section>
     <details className="technical-details"><summary>Технические компоненты objective</summary><dl><div><dt>Допустимых инженеров</dt><dd>{value.eligible_engineers_count ?? '—'}</dd></div><div><dt>Статус solver</dt><dd>{value.technical?.solver_status || '—'}</dd></div><div><dt>Objective</dt><dd>{value.technical?.objective ?? '—'}</dd></div><div><dt>Drop cost</dt><dd>{value.technical?.drop_cost ?? '—'}</dd></div><div><dt>Travel cost</dt><dd>{value.technical?.travel_cost ?? '—'}</dd></div>{Object.entries(value.technical?.objective_components || {}).map(([key, component]) => <div key={key}><dt>{key}</dt><dd>{String(component ?? '—')}</dd></div>)}</dl></details>
   </div> : <Empty title="Объяснение недоступно" text="Для старой версии плана не сохранились необходимые данные." />}</aside></div>
+}
+
+function assignmentSnapshot(value, timeZone) {
+  if (!value) return 'Не назначена'
+  const engineer = value.engineer_name || `Инженер #${value.engineer_id}`
+  const start = formatTime(value.planned_start, timeZone)
+  const finish = formatTime(value.planned_finish, timeZone)
+  const time = start === '—' ? '' : ` · ${start}${finish === '—' ? '' : `–${finish}`}`
+  const previousPoint = value.sequence == null ? '' : Number(value.sequence) === 1 ? ' · после старта инженера' : value.previous_job_id != null ? ` · после заявки №${value.previous_job_id}` : ' · после предыдущей заявки'
+  const sequence = value.sequence == null ? '' : ` · позиция ${value.sequence}${previousPoint}`
+  return `${formatDate(value.planning_date)} · ${engineer}${time}${sequence}`
+}
+
+function formatKilometers(meters) {
+  return `${new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 1 }).format(Number(meters || 0) / 1000)} км`
+}
+
+function metricTransition(before, after, formatter, hasPrevious = true) {
+  if (!hasPrevious) return formatter(after)
+  return `${formatter(before)} → ${formatter(after)}`
+}
+
+function metricDelta(value, formatter) {
+  const number = Number(value || 0)
+  if (!number) return 'без изменений'
+  return `${number > 0 ? '+' : '−'}${formatter(Math.abs(number))}`
+}
+
+function PlanningMetricsComparison({ comparison }) {
+  const metrics = comparison.metrics
+  if (!metrics?.days?.length) return null
+  return <section className="comparison-metrics" aria-labelledby="comparison-metrics-title">
+    <header><div><span>Метрики каждой версии</span><h3 id="comparison-metrics-title">Персонал и пробег по дням</h3><p>Персонал — число инженеров с назначениями в этот день. Пробег — сумма сохранённых участков маршрута до заявок.</p></div></header>
+    <div className="comparison-metric-overview"><div><span>Инженеров в горизонте</span><b>{metricTransition(metrics.totals.before.personnel_count, metrics.totals.after.personnel_count, Number, metrics.hasPrevious)}</b><small>{metrics.hasPrevious ? metricDelta(metrics.totals.personnelDelta, Number) : 'текущая версия'}</small></div><div><span>Назначено заявок</span><b>{metricTransition(metrics.totals.before.assigned_jobs_count, metrics.totals.after.assigned_jobs_count, Number, metrics.hasPrevious)}</b><small>{metrics.hasPrevious ? metricDelta(metrics.totals.assignmentsDelta, Number) : 'текущая версия'}</small></div><div><span>Пробег по горизонту</span><b>{metricTransition(metrics.totals.before.distance_meters, metrics.totals.after.distance_meters, formatKilometers, metrics.hasPrevious)}</b><small>{metrics.hasPrevious ? metricDelta(metrics.totals.distanceDeltaMeters, formatKilometers) : 'текущая версия'}</small></div></div>
+    <div className="comparison-metric-days">{metrics.days.map((day) => <article key={day.planningDate} className="comparison-metric-day">
+      <header><div><span>День планирования</span><h4>{formatDate(day.planningDate)}</h4></div><div className="comparison-day-totals"><div><span>Инженеров</span><b>{metricTransition(day.before.personnel_count, day.after.personnel_count, Number, metrics.hasPrevious)}</b><small>{metrics.hasPrevious ? metricDelta(day.personnelDelta, Number) : `${day.after.assigned_jobs_count} заявок`}</small></div><div><span>Пробег</span><b>{metricTransition(day.before.distance_meters, day.after.distance_meters, formatKilometers, metrics.hasPrevious)}</b><small>{metrics.hasPrevious ? metricDelta(day.distanceDeltaMeters, formatKilometers) : `${day.after.assigned_jobs_count} заявок`}</small></div></div></header>
+      <div className="comparison-engineer-metrics"><div className="comparison-engineer-heading"><span>Инженер</span><span>Заявки</span><span>Пробег</span><span>Изменение</span></div>{day.engineers.length ? day.engineers.map((engineer) => <div key={engineer.engineerId} className="comparison-engineer-row"><b>{engineer.engineerName}</b><span>{metricTransition(engineer.previousJobs, engineer.currentJobs, Number, metrics.hasPrevious)}</span><span>{metricTransition(engineer.previousDistanceMeters, engineer.currentDistanceMeters, formatKilometers, metrics.hasPrevious)}</span><small>{metrics.hasPrevious ? metricDelta(engineer.distanceDeltaMeters, formatKilometers) : 'текущая версия'}</small></div>) : <div className="comparison-engineer-empty">В этот день назначений и задействованных инженеров нет.</div>}</div>
+    </article>)}</div>
+  </section>
+}
+
+function PlanComparison({ plan, loading, error, timeZone, versions = [], selectedVersionId, onVersionChange }) {
+  if (loading) return <section className="replanning-comparison"><div className="comparison-loading"><span className="spinner" /> Сравниваем версии плана…</div></section>
+  if (error) return <section className="replanning-comparison"><header><div><span>История планирования</span><h2>Что изменилось после перепланирования</h2></div></header><p className="comparison-error">Не удалось загрузить сравнение: {error}</p></section>
+  if (!plan?.version) return null
+  const comparison = buildPlanComparison(plan)
+  return <section className="replanning-comparison" aria-labelledby="comparison-title">
+    <header><div><span>История планирования</span><h2 id="comparison-title">Что изменилось после перепланирования</h2><p>{comparison.hasPreviousVersion ? `Версия ${comparison.currentVersionNumber} сопоставлена с версией ${comparison.previousVersionNumber}. Сравнение охватывает весь опубликованный горизонт.` : 'Это первая опубликованная версия плана — предыдущего снимка для сравнения ещё нет.'}</p></div><div className="comparison-version-control">{versions.length > 1 && <label><span>Версия для анализа</span><select value={selectedVersionId || plan.version.id} onChange={(event) => onVersionChange(Number(event.target.value))}>{versions.map((version) => <option key={version.id} value={version.id}>v{version.version_number}{version.is_current ? ' · текущая' : ''} · {formatDate(version.published_at)}</option>)}</select></label>}{comparison.hasPreviousVersion && <b>v{comparison.previousVersionNumber} → v{comparison.currentVersionNumber}</b>}</div></header>
+    {comparison.hasPreviousVersion && <>
+      <div className="comparison-stats"><div><span>Изменились</span><b>{comparison.counts.changed}</b></div><div><span>Новые назначения</span><b>{comparison.counts.assigned}</b></div><div><span>Перестроены</span><b>{comparison.counts.replanned}</b></div><div><span>Без изменений</span><b>{comparison.counts.unchanged}</b></div></div>
+      <div className="comparison-cause-summary"><span>{comparison.counts.changed ? 'Почему план отличается' : 'Почему появилась новая версия'}</span><b>{planComparisonCause(comparison)}</b></div>
+      {comparison.counts.changed ? <div className="comparison-change-list">
+        {comparison.changes.map((change) => { const explanation = planChangeExplanation(change, comparison); return <article key={`${change.job_id}-${change.change_type}`} className={`comparison-change ${String(change.change_type || '').toLowerCase()}`}><header><div><span>Заявка #{change.job_id}</span><h3>{change.job?.address || plan.assignments?.find((item) => Number(item.job_id) === Number(change.job_id))?.address || planChangeTitle(change)}</h3>{change.job?.work_type && <small>{change.job.work_type}</small>}</div><b>{planChangeTitle(change)}</b></header><div className="comparison-explanation"><div><span>Почему</span><p>{explanation.cause}</p></div><div><span>Что изменилось</span><p>{explanation.effect}</p></div><div><span>Зачем</span><p>{explanation.purpose}</p></div><small className="comparison-basis">Основание: {explanation.basis}</small></div><div className="comparison-route-diff"><div><span>Было</span><b>{assignmentSnapshot(change.old_assignment, timeZone)}</b></div><i>→</i><div><span>Стало</span><b>{assignmentSnapshot(change.new_assignment, timeZone)}</b></div></div></article> })}
+        {comparison.unassignedChanges.map((change) => { const explanation = unassignedChangeExplanation(change, comparison); return <article key={`unassigned-${change.job_id}`} className="comparison-change unassigned"><header><div><span>Заявка #{change.job_id}</span><h3>{change.job?.address || 'Неназначенная заявка'}</h3>{change.job?.work_type && <small>{change.job.work_type}</small>}</div><b>{change.change_type === 'NEW_UNASSIGNED' ? 'Новая неназначенная заявка' : change.change_type === 'UNASSIGNED_REMOVED' ? 'Больше не числится неназначенной' : 'Изменилась причина неназначения'}</b></header><div className="comparison-explanation"><div><span>Почему</span><p>{explanation.cause}</p></div><div><span>Что изменилось</span><p>{explanation.effect}</p></div><div><span>Зачем</span><p>{explanation.purpose}</p></div><small className="comparison-basis">Основание: {explanation.basis}</small></div><div className="comparison-route-diff"><div><span>Было</span><b>{change.previous_reason?.text || 'Не была в списке неназначенных'}</b></div><i>→</i><div><span>Стало</span><b>{change.current_reason?.text || (change.change_type === 'UNASSIGNED_REMOVED' ? 'Не числится неназначенной' : 'Причина не сохранена')}</b></div></div></article> })}
+      </div> : <div className="comparison-no-changes"><b>Результаты планирования не изменились</b><span>Новая версия сохранила назначения и причины неназначения.</span></div>}
+      {comparison.unchanged.length > 0 && <details className="comparison-unchanged"><summary>{unchangedAssignmentsLabel(comparison.unchanged.length)}</summary><p>Для этих заявок дата, инженер, время, позиция и параметры переезда совпадают с прошлой версией. Актуальные данные и ограничения по-прежнему допускают выбранное назначение.</p><div>{comparison.unchanged.map((assignment) => <article key={assignment.job_id}><span>Заявка #{assignment.job_id}</span><b>{assignment.address || assignment.work_type || 'Назначение сохранено'}</b><small>{assignmentSnapshot(assignment, timeZone)}</small></article>)}</div></details>}
+      {comparison.unchangedUnassigned.length > 0 && <details className="comparison-unchanged"><summary>{unchangedUnassignedLabel(comparison.unchangedUnassigned.length)}</summary><p>Эти заявки остались без назначения по той же основной причине, что и в предыдущей версии.</p><div>{comparison.unchangedUnassigned.map((item) => <article key={item.job_id}><span>Заявка #{item.job_id}</span><b>{item.job?.address || item.job?.work_type || 'Неназначенная заявка'}</b><small>{item.reason?.text || 'Причина не сохранена'}</small></article>)}</div></details>}
+    </>}
+    <PlanningMetricsComparison comparison={comparison} />
+  </section>
 }
 
 export default function DynamicPlanningPage({ projectId, notify, ownerMode = false, onNavigate }) {
@@ -143,6 +208,55 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
   const [drawerLoading, setDrawerLoading] = useState(false)
   const [drawerUpdated, setDrawerUpdated] = useState(false)
   const [returnFocus, setReturnFocus] = useState(null)
+  const [comparisonPlan, setComparisonPlan] = useState(null)
+  const [comparisonLoading, setComparisonLoading] = useState(false)
+  const [comparisonError, setComparisonError] = useState('')
+  const [comparisonVersions, setComparisonVersions] = useState([])
+  const [selectedComparisonVersionId, setSelectedComparisonVersionId] = useState(null)
+  const comparisonRequest = useRef('')
+  const comparisonVersionsRequest = useRef('')
+  const selectedComparisonVersion = useRef(null)
+
+  async function loadComparisonVersions(currentVersionId) {
+    if (!currentVersionId) { setComparisonVersions([]); return }
+    const requestKey = `${base}:versions:${currentVersionId}`
+    if (comparisonVersionsRequest.current === requestKey) return
+    comparisonVersionsRequest.current = requestKey
+    try {
+      const value = await api(`${base}/versions?limit=50&offset=0`)
+      if (comparisonVersionsRequest.current === requestKey) setComparisonVersions(Array.isArray(value?.items) ? value.items : [])
+    } catch {
+      if (comparisonVersionsRequest.current === requestKey) comparisonVersionsRequest.current = ''
+    }
+  }
+
+  async function loadComparison(versionId) {
+    if (!versionId) { setComparisonPlan(null); return }
+    const requestKey = `${base}:${versionId}`
+    if (comparisonRequest.current === requestKey) return
+    comparisonRequest.current = requestKey
+    setComparisonLoading(true)
+    setComparisonError('')
+    try {
+      const value = await api(`${base}/versions/${versionId}`)
+      if (comparisonRequest.current === requestKey && Number(value?.version?.id) === Number(versionId)) setComparisonPlan(value)
+    } catch (error) {
+      if (comparisonRequest.current === requestKey) {
+        setComparisonPlan(null)
+        setComparisonError(error.message)
+        setComparisonLoading(false)
+        comparisonRequest.current = ''
+      }
+    } finally {
+      if (comparisonRequest.current === requestKey) setComparisonLoading(false)
+    }
+  }
+
+  function selectComparisonVersion(versionId) {
+    selectedComparisonVersion.current = versionId
+    setSelectedComparisonVersionId(versionId)
+    void loadComparison(versionId)
+  }
 
   async function loadDay(date, versionId, quiet = false) {
     try {
@@ -166,6 +280,23 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
       const nextDate = selectPlanningDate(value.days, preferredDate, value.project_date)
       const previousVersion = board?.plan_version?.id
       setBoard(value)
+      if (value.plan_version?.id) {
+        const followsCurrent = !selectedComparisonVersion.current || !previousVersion || Number(selectedComparisonVersion.current) === Number(previousVersion)
+        const targetVersionId = followsCurrent ? value.plan_version.id : selectedComparisonVersion.current
+        selectedComparisonVersion.current = targetVersionId
+        setSelectedComparisonVersionId(targetVersionId)
+        void loadComparison(targetVersionId)
+        void loadComparisonVersions(value.plan_version.id)
+      } else {
+        comparisonRequest.current = ''
+        comparisonVersionsRequest.current = ''
+        selectedComparisonVersion.current = null
+        setSelectedComparisonVersionId(null)
+        setComparisonVersions([])
+        setComparisonPlan(null)
+        setComparisonError('')
+        setComparisonLoading(false)
+      }
       if (!quiet) emitPlanningEvent('planning_board_opened', { project_id: projectId, plan_version_id: value.plan_version?.id })
       setSelectedDate(nextDate)
       const nextDay = nextDate === value.project_date ? value.selected_day : await loadDay(nextDate, value.plan_version?.id, true)
@@ -182,7 +313,10 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
   }
 
   useEffect(() => {
-    setBoard(null); setDay(null); setSelectedDate(''); setLoading(true); setDrawer(null)
+    comparisonRequest.current = ''
+    comparisonVersionsRequest.current = ''
+    selectedComparisonVersion.current = null
+    setBoard(null); setDay(null); setSelectedDate(''); setLoading(true); setDrawer(null); setComparisonPlan(null); setComparisonVersions([]); setSelectedComparisonVersionId(null); setComparisonLoading(false); setComparisonError('')
     void loadBoard(false, '')
   }, [projectId, ownerMode])
 
@@ -242,6 +376,7 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
       {!board?.plan_version ? <Empty title="План ещё не рассчитан" text={board?.readiness?.ready === false ? 'Подготовьте обязательные данные, затем запустите расчёт.' : 'Нажмите «Рассчитать маршруты», чтобы опубликовать первый план.'} action={board?.readiness?.ready !== false && <Button onClick={calculate}>Рассчитать маршруты</Button>} /> : <>
         <section className="board-filters"><label className="board-search"><span>⌕</span><input aria-label="Поиск по адресу и типу работ" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Адрес или тип работ" /></label><select aria-label="Приоритет" value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}><option value="">Все приоритеты</option>{Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select aria-label="Статус заявки" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Все статусы</option>{safeArray(day?.available_filters?.statuses).map((status) => <option key={status} value={status}>{statusLabels[status] || status}</option>)}</select><select aria-label="Результат" value={filters.outcome} onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}><option value="ALL">Все</option><option value="ASSIGNED">Назначенные</option><option value="UNASSIGNED_TODAY">Перенесённые и неназначенные</option></select>{filtered && <span className="shown-count">Показано {visibleCount} из {allCards.length}</span>}</section>
         {!day ? <div className="board-loading"><span className="spinner" /> Загружаем день…</div> : !day.result_available ? <Empty title="Для этой даты нет результата расчёта" text="Дата не рассчитывалась в актуальной версии плана." /> : <><Suspense fallback={<div className="map-loading"><span className="spinner" /> Загружаем карту…</div>}><RoutesMap day={day} planningDate={selectedDate} timeZone={board?.timezone} /></Suspense><div className="route-board"><div className="route-board-scroll">{safeArray(day.engineer_columns).map((column) => <EngineerColumn key={column.engineer_id} column={column} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} />)}<UnassignedColumn value={day.unassigned} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} /></div></div></>}
+        <PlanComparison plan={comparisonPlan} loading={comparisonLoading} error={comparisonError} timeZone={board?.timezone} versions={comparisonVersions} selectedVersionId={selectedComparisonVersionId} onVersionChange={selectComparisonVersion} />
       </>}
     </>}
     {drawer && <ExplanationDrawer value={drawer} loading={drawerLoading} updated={drawerUpdated} onClose={() => { setDrawer(null); setDrawerUpdated(false) }} returnFocus={returnFocus} timeZone={board?.timezone} />}

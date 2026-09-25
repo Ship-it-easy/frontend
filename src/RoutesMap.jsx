@@ -1,17 +1,44 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
-import { buildRoutesMapModel, coordinatePoint, decodePolyline6 } from './routesMapModel.js'
+import { buildRoutesMapModel, coordinatePoint, decodePolyline6, mapBoundsSignature, routeGeometrySignature } from './routesMapModel.js'
 import { formatDate, formatTime } from './ui.jsx'
 
 const VALHALLA_URL = (import.meta.env.VITE_VALHALLA_URL || '/valhalla').replace(/\/$/, '')
 
-function FitMap({ points }) {
+function FitMap({ points, resetKey }) {
   const map = useMap()
+  const userChangedView = useRef(false)
+  const previousResetKey = useRef(resetKey)
+
   useEffect(() => {
-    if (points.length) map.fitBounds(points, { padding: [34, 34], maxZoom: 15 })
-  }, [map, points])
+    const container = map.getContainer()
+    const markUserInteraction = () => { userChangedView.current = true }
+    container.addEventListener('pointerdown', markUserInteraction)
+    container.addEventListener('wheel', markUserInteraction, { passive: true })
+    container.addEventListener('keydown', markUserInteraction)
+    return () => {
+      container.removeEventListener('pointerdown', markUserInteraction)
+      container.removeEventListener('wheel', markUserInteraction)
+      container.removeEventListener('keydown', markUserInteraction)
+    }
+  }, [map])
+
+  useEffect(() => {
+    const contextChanged = previousResetKey.current !== resetKey
+    if (contextChanged) {
+      previousResetKey.current = resetKey
+      userChangedView.current = false
+    }
+    if (points.length && (!userChangedView.current || contextChanged)) map.fitBounds(points, { padding: [34, 34], maxZoom: 15 })
+  }, [map, points, resetKey])
   return null
+}
+
+function useStableValue(value, signature) {
+  const ref = useRef({ signature, value })
+  if (ref.current.signature !== signature) ref.current = { signature, value }
+  return ref.current.value
 }
 
 function SequenceTooltip({ children }) {
@@ -24,12 +51,14 @@ function JobPopup({ job, timeZone, prefix }) {
 
 export default function RoutesMap({ day, planningDate, timeZone }) {
   const model = useMemo(() => buildRoutesMapModel(day), [day])
+  const stablePoints = useStableValue(model.points, mapBoundsSignature(model.points))
+  const stableRoutes = useStableValue(model.routes, routeGeometrySignature(model.routes))
   const [geometry, setGeometry] = useState({ lines: {}, failed: 0, loading: false })
 
   useEffect(() => {
     const controller = new AbortController()
     let active = true
-    const routable = model.routes.filter((route) => route.locations.length >= 2)
+    const routable = stableRoutes.filter((route) => route.locations.length >= 2)
     setGeometry({ lines: {}, failed: 0, loading: routable.length > 0 })
     Promise.all(routable.map(async (route) => {
       const fallback = route.locations.map(coordinatePoint)
@@ -69,7 +98,7 @@ export default function RoutesMap({ day, planningDate, timeZone }) {
       active = false
       controller.abort()
     }
-  }, [model.routes])
+  }, [stableRoutes])
 
   if (!model.points.length) return <section className="routes-map-card empty-map"><div><span className="eyebrow">{formatDate(planningDate)}</span><h2>Карта маршрутов</h2><p>Для выбранного дня нет заявок или стартовых точек с координатами.</p>{model.missingCoordinateCount > 0 && <small>Без координат: {model.missingCoordinateCount}</small>}</div></section>
 
@@ -78,7 +107,7 @@ export default function RoutesMap({ day, planningDate, timeZone }) {
     <div className="route-map-legend">{model.routes.filter((route) => route.jobs.length).map((route) => <span key={route.engineerId}><i style={{ background: route.color }} />{route.engineerName}<small>{route.jobs.length}</small></span>)}{model.unassigned.length > 0 && <span><i className="unassigned" />Неназначенные<small>{model.unassigned.length}</small></span>}{model.cancelled.length > 0 && <span><i className="cancelled" />Отменённые<small>{model.cancelled.length}</small></span>}</div>
     <MapContainer className="routes-map" center={model.points[0]} zoom={12} scrollWheelZoom>
       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />
-      <FitMap points={model.points} />
+      <FitMap points={stablePoints} resetKey={planningDate} />
       {model.routes.map((route) => {
         const routeGeometry = geometry.lines[String(route.engineerId)]
         const fallback = route.locations.map(coordinatePoint)
