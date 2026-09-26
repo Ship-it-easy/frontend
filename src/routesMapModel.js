@@ -31,6 +31,21 @@ export function routeGeometrySignature(routes) {
   }).sort().join('|')
 }
 
+export function routeForecastSignature(routes) {
+  return safeArray(routes).map((route) => JSON.stringify({
+    geometry: routeGeometrySignature([route]),
+    plannedDeparture: route.plannedDeparture,
+    shiftStart: route.shiftStart,
+    missingCoordinateCount: route.missingCoordinateCount,
+    jobs: safeArray(route.jobs).map((job) => ({
+      id: job.job_id,
+      duration: job.duration_min,
+      windowStart: job.time_window_start,
+      plannedStart: job.planned_start,
+    })),
+  })).sort().join('|')
+}
+
 export function decodePolyline6(encoded) {
   if (typeof encoded !== 'string' || !encoded.length) return []
   let index = 0
@@ -74,12 +89,18 @@ export function buildRoutesMapModel(day) {
       .sort((left, right) => Number(left.route_position || 0) - Number(right.route_position || 0))
     const visibleJobs = jobs.filter((job) => validCoordinate(job.coordinate))
     const start = validCoordinate(column.start_coordinate) ? column.start_coordinate : null
+    const firstJob = visibleJobs[0]
+    const plannedDeparture = firstJob?.planned_arrival
+      ? new Date(new Date(firstJob.planned_arrival).getTime() - Number(firstJob.travel_from_previous_min || 0) * 60_000).toISOString()
+      : null
     return {
       engineerId: column.engineer_id,
       engineerName: column.name || `Инженер #${column.engineer_id}`,
       transportType: column.transport_type || 'NONE',
       startAddress: column.start_address || 'Стартовая точка',
       start,
+      shiftStart: column.shift_start,
+      plannedDeparture,
       jobs: visibleJobs,
       locations: [start, ...visibleJobs.map((job) => job.coordinate)].filter(Boolean),
       color: colorFor(column.engineer_id, index),

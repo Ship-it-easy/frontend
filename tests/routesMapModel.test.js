@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildRoutesMapModel, decodePolyline6, mapBoundsSignature, routeGeometrySignature, validCoordinate } from '../src/routesMapModel.js'
+import { buildRoutesMapModel, decodePolyline6, mapBoundsSignature, routeForecastSignature, routeGeometrySignature, validCoordinate } from '../src/routesMapModel.js'
 
 test('route map model keeps route order and reports jobs without coordinates', () => {
   const day = {
@@ -64,4 +64,22 @@ test('route geometry signature ignores response identity but tracks route order'
 
   assert.equal(routeGeometrySignature([route]), routeGeometrySignature([{ ...route, locations: route.locations.map((point) => ({ ...point })) }]))
   assert.notEqual(routeGeometrySignature([route]), routeGeometrySignature([{ ...route, locations: [...route.locations].reverse() }]))
+})
+
+test('forecast refreshes when plan timings change without moving stops', () => {
+  const original = {
+    engineerId: 7,
+    transportType: 'PUBLIC_TRANSPORT',
+    locations: [{ latitude: 55.7, longitude: 37.5 }, { latitude: 55.8, longitude: 37.6 }],
+    plannedDeparture: '2026-09-26T06:00:00Z',
+    jobs: [{ job_id: 1, duration_min: 30, planned_start: '2026-09-26T07:00:00Z' }],
+  }
+  const changed = {
+    ...original,
+    plannedDeparture: '2026-09-26T07:00:00Z',
+    jobs: [{ ...original.jobs[0], duration_min: 90 }],
+  }
+  assert.equal(routeGeometrySignature([original]), routeGeometrySignature([changed]))
+  assert.notEqual(routeForecastSignature([original]), routeForecastSignature([changed]))
+  assert.equal(routeForecastSignature([original]), routeForecastSignature([{ ...original }]))
 })
