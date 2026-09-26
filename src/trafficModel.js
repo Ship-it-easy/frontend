@@ -1,3 +1,4 @@
+import { transportProfile } from './transport.js'
 export function departureInstant(day, clock, timeZone = 'Europe/Moscow') {
   const wall = Date.parse(`${day}T${clock.slice(0, 5)}:00Z`)
   if (!Number.isFinite(wall)) throw new Error('Не указано время выезда')
@@ -18,7 +19,7 @@ export function trafficRequest(route, day, clock, timeZone, accessMinutes = 0) {
     departure_at: clock
       ? departureInstant(day, clock, timeZone)
       : route.plannedDeparture || departureInstant(day, route.shiftStart, timeZone),
-    profile: route.transportType === 'CAR' ? 'auto' : 'pedestrian',
+    profile: transportProfile(route.transportType || 'NONE'),
     stops: [{ ...route.start }, ...route.jobs.map(job => ({
       ...job.coordinate, job_id: job.job_id,
       service_seconds: Math.max(0, Math.round(Number(job.duration_min || 0) * 60)),

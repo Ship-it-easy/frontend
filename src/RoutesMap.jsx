@@ -1,11 +1,8 @@
+import { movementStyle, movementStyles, transportLabel } from './transport.js'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
-<<<<<<< HEAD
-import { buildRoutesMapModel, coordinatePoint } from './routesMapModel.js'
-=======
 import { buildRoutesMapModel, coordinatePoint, mapBoundsSignature, routeGeometrySignature } from './routesMapModel.js'
->>>>>>> origin/main
 import { formatDate, formatTime } from './ui.jsx'
 import { api } from './api.js'
 import { congestionColor, frequentSegments, trafficRequest } from './trafficModel.js'
@@ -61,7 +58,7 @@ export default function RoutesMap({ day, planningDate, timeZone }) {
   const stableRoutes = useStableValue(model.routes, routeGeometrySignature(model.routes))
   const [geometry, setGeometry] = useState({ lines: {}, failed: 0, loading: false })
   const [departure, setDeparture] = useState('')
-  const [showTraffic, setShowTraffic] = useState(true)
+  const [showTraffic, setShowTraffic] = useState(false)
   const [accessMinutes, setAccessMinutes] = useState(0)
   const segments = useMemo(() => frequentSegments(geometry.lines), [geometry.lines])
 
@@ -110,8 +107,9 @@ export default function RoutesMap({ day, planningDate, timeZone }) {
   return <section className="routes-map-card">
     <header><div><span className="eyebrow">{formatDate(planningDate)}</span><h2>Карта маршрутов</h2><p>Стартовые точки, последовательность заявок и маршруты всех инженеров выбранного дня.</p></div><div className="route-map-status">{geometry.loading && <span><i className="spinner" /> Строим дороги</span>}{model.missingCoordinateCount > 0 && <span className="map-warning">Без координат: {model.missingCoordinateCount}</span>}{geometry.failed > 0 && <span className="map-warning">Для {geometry.failed} маршрутов показаны прямые линии</span>}</div></header>
     <div className="route-map-legend">{model.routes.filter((route) => route.jobs.length).map((route) => <span key={route.engineerId}><i style={{ background: route.color }} />{route.engineerName}<small>{route.jobs.length}</small></span>)}{model.unassigned.length > 0 && <span><i className="unassigned" />Неназначенные<small>{model.unassigned.length}</small></span>}{model.cancelled.length > 0 && <span><i className="cancelled" />Отменённые<small>{model.cancelled.length}</small></span>}</div>
-    <div className="traffic-controls"><label>Выезд для всех ({timeZone || 'Europe/Moscow'}) <input type="time" step="300" value={departure} onChange={e => setDeparture(e.target.value)} /></label><button type="button" onClick={() => setDeparture('')}>По опубликованному плану</button><label>Парковка и проход к клиенту <input type="number" min="0" max="120" step="1" value={accessMinutes} onChange={e => setAccessMinutes(Math.max(0, Math.min(120, Number(e.target.value) || 0)))} /> мин / заявка</label><label><input type="checkbox" checked={showTraffic} onChange={e => setShowTraffic(e.target.checked)} /> Окраска по замедлению</label><p>Коэффициент ×2 означает вдвое больше времени. Для каждой автомобильной дороги применяется коэффициент района на время въезда, включая дороги за границей текущей карты. Пустое время выезда использует опубликованный план.</p></div>
-    <TrafficRouteSummary routes={model.routes} lines={geometry.lines} loading={geometry.loading} timeZone={timeZone} onDeparture={setDeparture} />
+    <div className="route-map-modes" aria-label="Цвета способов передвижения">{['car', 'walk', 'bicycle', 'bus', 'tram', 'subway', 'rail', 'cable_car'].map((type) => <span key={type}><i style={{ background: movementStyles[type].color }} />{movementStyles[type].label}</span>)}<small>Кружок — исполнитель, линия — транспорт. При включении пробок цвет автомобиля показывает замедление.</small></div>
+    <div className="traffic-controls"><label>Выезд для всех ({timeZone || 'Europe/Moscow'}) <input type="time" step="300" value={departure} onChange={e => setDeparture(e.target.value)} /></label><button type="button" onClick={() => setDeparture('')}>По опубликованному плану</button><label>Парковка и проход к клиенту <input type="number" min="0" max="120" step="1" value={accessMinutes} onChange={e => setAccessMinutes(Math.max(0, Math.min(120, Number(e.target.value) || 0)))} /> мин / заявка</label><label><input type="checkbox" checked={showTraffic} onChange={e => setShowTraffic(e.target.checked)} /> Окраска по замедлению автомобилей</label><p>Коэффициент ×2 означает вдвое больше времени. Для каждой автомобильной дороги применяется коэффициент района на время въезда, включая дороги за границей текущей карты. Пустое время выезда использует опубликованный план.</p></div>
+    <TrafficRouteSummary routes={model.routes} lines={geometry.lines} loading={geometry.loading} timeZone={timeZone} planningDate={planningDate} accessMinutes={accessMinutes} onDeparture={setDeparture} />
     {segments.length > 0 && <details className="traffic-table"><summary>Часто используемые участки в маршрутах инженеров — выбранный день</summary><p>Частота — число проездов в рассчитанных маршрутах, не городской транспортный поток. Коэффициент указан для первого проезда; точные границы — координаты дорожного манёвра.</p><table><thead><tr><th>Участок</th><th>Проездов</th><th>Первый въезд</th><th>Коэффициент</th></tr></thead><tbody>{segments.map((s, i) => <tr key={i}><td>{s.road}<small>{s.points[0].map(v => v.toFixed(4)).join(', ')} → {s.points.at(-1).map(v => v.toFixed(4)).join(', ')}</small></td><td>{s.count}</td><td>{formatTime(s.departure_at, timeZone)}</td><td>{s.coefficient == null ? 'Нет данных' : `×${s.coefficient}`}</td></tr>)}</tbody></table></details>}
     <MapContainer className="routes-map" center={model.points[0]} zoom={12} scrollWheelZoom>
       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />
@@ -121,9 +119,14 @@ export default function RoutesMap({ day, planningDate, timeZone }) {
         const fallback = route.locations.map(coordinatePoint)
         const line = routeGeometry?.points || fallback
         return <React.Fragment key={route.engineerId}>
-          {showTraffic && routeGeometry?.traffic?.legs.flatMap(leg => leg.segments).map((segment, index) => segment.points.length >= 2 && <Polyline key={`traffic-${index}`} positions={segment.points} pathOptions={{ color: congestionColor(segment.coefficient), weight: 7, opacity: .9 }}><Popup><b>{segment.road}</b><p>{route.engineerName} · {formatTime(segment.departure_at, timeZone)} · {segment.coefficient == null ? 'Нет данных о пробках' : `×${segment.coefficient} (${segment.traffic_source === 'district' ? 'коэффициент района' : 'оценка дороги'})`}</p></Popup></Polyline>)}
-          {line.length >= 2 && (!showTraffic || !routeGeometry?.traffic) && <Polyline positions={line} pathOptions={{ color: route.color, weight: 5, opacity: .82, dashArray: routeGeometry?.fallback ? '9 8' : undefined }} />}
-          {route.start && <CircleMarker center={coordinatePoint(route.start)} radius={11} pathOptions={{ color: '#fff', weight: 3, fillColor: route.color, fillOpacity: 1 }}><SequenceTooltip>С</SequenceTooltip><Popup><div className="route-map-popup"><b>Старт · {route.engineerName}</b><span>{route.startAddress}</span><small>{route.transportType === 'CAR' ? 'Автомобиль' : 'Пеший маршрут'}</small></div></Popup></CircleMarker>}
+          {routeGeometry?.traffic?.legs.flatMap(leg => leg.segments).map((segment, index) => {
+            if (segment.points.length < 2) return null
+            const style = movementStyle(segment, route.transportType)
+            const name = `${style.label}${segment.travel_mode === 'transit' ? ` · ${segment.road}` : ''}`
+            return <Polyline key={`route-${index}`} positions={segment.points} pathOptions={{ color: showTraffic && route.transportType === 'CAR' ? congestionColor(segment.coefficient) : style.color, weight: segment.travel_mode === 'transit' ? 7 : 5, opacity: .9, dashArray: style.dashArray }}><Tooltip sticky>{name}</Tooltip><Popup><b>{name}</b><p>{route.engineerName} · {formatTime(segment.departure_at, timeZone)}{segment.transit ? ` · ${segment.transit.from_stop} → ${segment.transit.to_stop}` : ''}{showTraffic && route.transportType === 'CAR' ? ` · ×${segment.coefficient}` : ''}</p>{['metro', 'subway'].includes(segment.travel_type) && <small>{segment.traffic_source === 'mosmetro' ? 'MosMetro API · время ориентировочное' : 'Интервальная модель GTFS · время ориентировочное'}</small>}</Popup></Polyline>
+          })}
+          {line.length >= 2 && !routeGeometry?.traffic && <Polyline positions={line} pathOptions={{ color: movementStyle({}, route.transportType).color, weight: 5, opacity: .82, dashArray: routeGeometry?.fallback ? '9 8' : undefined }} />}
+          {route.start && <CircleMarker center={coordinatePoint(route.start)} radius={11} pathOptions={{ color: '#fff', weight: 3, fillColor: route.color, fillOpacity: 1 }}><SequenceTooltip>С</SequenceTooltip><Popup><div className="route-map-popup"><b>Старт · {route.engineerName}</b><span>{route.startAddress}</span><small>{transportLabel(route.transportType)}</small></div></Popup></CircleMarker>}
           {route.jobs.map((job) => <CircleMarker key={job.job_id} center={coordinatePoint(job.coordinate)} radius={10} pathOptions={{ color: '#fff', weight: 3, fillColor: route.color, fillOpacity: 1 }}><SequenceTooltip>{job.route_position}</SequenceTooltip><JobPopup job={job} timeZone={timeZone} prefix={route.engineerName} /></CircleMarker>)}
         </React.Fragment>
       })}
