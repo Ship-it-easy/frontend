@@ -1,6 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { departureInstant, trafficRequest, congestionColor, sameLocalDay, routeTime } from './trafficModel.js'
+import { departureInstant, trafficRequest, congestionColor, projectTrafficRouteUrl, sameLocalDay, routeTime } from './trafficModel.js'
+
+test('traffic requests use the selected project scope', () => {
+  assert.equal(projectTrafficRouteUrl(7), '/api/projects/7/workspace/traffic/route')
+  assert.equal(projectTrafficRouteUrl(8), '/api/projects/8/workspace/traffic/route')
+  assert.throws(() => projectTrafficRouteUrl(null))
+})
 
 test('midnight is evaluated in project timezone and arrival shows the new date', () => {
   const start = '2026-09-23T20:55:00Z'

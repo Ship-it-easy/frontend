@@ -2,10 +2,10 @@ import { movementStyle, movementStyles, transportLabel } from './transport.js'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
-import { buildRoutesMapModel, coordinatePoint, mapBoundsSignature, routeGeometrySignature } from './routesMapModel.js'
+import { buildRoutesMapModel, coordinatePoint, mapBoundsSignature, routeForecastSignature } from './routesMapModel.js'
 import { formatDate, formatTime } from './ui.jsx'
 import { api } from './api.js'
-import { congestionColor, frequentSegments, trafficRequest } from './trafficModel.js'
+import { congestionColor, frequentSegments, projectTrafficRouteUrl, trafficRequest } from './trafficModel.js'
 import TrafficRouteSummary from './TrafficRouteSummary.jsx'
 
 
@@ -52,10 +52,11 @@ function JobPopup({ job, timeZone, prefix }) {
   return <Popup><div className="route-map-popup"><b>{prefix}{job.route_position ? ` · №${job.route_position}` : ''}</b><span>{job.address || 'Адрес не указан'}</span>{job.planned_start && <small>{formatTime(job.planned_start, timeZone)}–{formatTime(job.planned_end, timeZone)}</small>}{job.work_type && <small>{job.work_type}</small>}{job.sla_date && <small>SLA {formatDate(job.sla_date)}</small>}</div></Popup>
 }
 
-export default function RoutesMap({ day, planningDate, timeZone }) {
+export default function RoutesMap({ day, planningDate, timeZone, projectId }) {
   const model = useMemo(() => buildRoutesMapModel(day), [day])
   const stablePoints = useStableValue(model.points, mapBoundsSignature(model.points))
-  const stableRoutes = useStableValue(model.routes, routeGeometrySignature(model.routes))
+  const stableRoutes = useStableValue(model.routes, routeForecastSignature(model.routes))
+  const trafficRouteUrl = projectTrafficRouteUrl(projectId)
   const [geometry, setGeometry] = useState({ lines: {}, failed: 0, loading: false })
   const [departure, setDeparture] = useState('')
   const [showTraffic, setShowTraffic] = useState(false)
@@ -70,7 +71,7 @@ export default function RoutesMap({ day, planningDate, timeZone }) {
     Promise.all(routable.map(async (route) => {
       const fallback = route.locations.map(coordinatePoint)
       try {
-        const value = await api('/api/project/traffic/route', {
+        const value = await api(trafficRouteUrl, {
           method: 'POST',
           body: JSON.stringify(trafficRequest(route, planningDate, departure, timeZone, accessMinutes)),
           signal: controller.signal,
@@ -100,7 +101,7 @@ export default function RoutesMap({ day, planningDate, timeZone }) {
       active = false
       controller.abort()
     }
-  }, [stableRoutes, planningDate, departure, timeZone, accessMinutes])
+  }, [stableRoutes, planningDate, departure, timeZone, accessMinutes, trafficRouteUrl])
 
   if (!model.points.length) return <section className="routes-map-card empty-map"><div><span className="eyebrow">{formatDate(planningDate)}</span><h2>Карта маршрутов</h2><p>Для выбранного дня нет заявок или стартовых точек с координатами.</p>{model.missingCoordinateCount > 0 && <small>Без координат: {model.missingCoordinateCount}</small>}</div></section>
 
@@ -109,7 +110,7 @@ export default function RoutesMap({ day, planningDate, timeZone }) {
     <div className="route-map-legend">{model.routes.filter((route) => route.jobs.length).map((route) => <span key={route.engineerId}><i style={{ background: route.color }} />{route.engineerName}<small>{route.jobs.length}</small></span>)}{model.unassigned.length > 0 && <span><i className="unassigned" />Неназначенные<small>{model.unassigned.length}</small></span>}{model.cancelled.length > 0 && <span><i className="cancelled" />Отменённые<small>{model.cancelled.length}</small></span>}</div>
     <div className="route-map-modes" aria-label="Цвета способов передвижения">{['car', 'walk', 'bicycle', 'bus', 'tram', 'subway', 'rail', 'cable_car'].map((type) => <span key={type}><i style={{ background: movementStyles[type].color }} />{movementStyles[type].label}</span>)}<small>Кружок — исполнитель, линия — транспорт. При включении пробок цвет автомобиля показывает замедление.</small></div>
     <div className="traffic-controls"><label>Выезд для всех ({timeZone || 'Europe/Moscow'}) <input type="time" step="300" value={departure} onChange={e => setDeparture(e.target.value)} /></label><button type="button" onClick={() => setDeparture('')}>По опубликованному плану</button><label>Парковка и проход к клиенту <input type="number" min="0" max="120" step="1" value={accessMinutes} onChange={e => setAccessMinutes(Math.max(0, Math.min(120, Number(e.target.value) || 0)))} /> мин / заявка</label><label><input type="checkbox" checked={showTraffic} onChange={e => setShowTraffic(e.target.checked)} /> Окраска по замедлению автомобилей</label><p>Коэффициент ×2 означает вдвое больше времени. Для каждой автомобильной дороги применяется коэффициент района на время въезда, включая дороги за границей текущей карты. Пустое время выезда использует опубликованный план.</p></div>
-    <TrafficRouteSummary routes={model.routes} lines={geometry.lines} loading={geometry.loading} timeZone={timeZone} planningDate={planningDate} accessMinutes={accessMinutes} onDeparture={setDeparture} />
+    <TrafficRouteSummary routes={stableRoutes} lines={geometry.lines} loading={geometry.loading} timeZone={timeZone} planningDate={planningDate} accessMinutes={accessMinutes} onDeparture={setDeparture} trafficRouteUrl={trafficRouteUrl} />
     {segments.length > 0 && <details className="traffic-table"><summary>Часто используемые участки в маршрутах инженеров — выбранный день</summary><p>Частота — число проездов в рассчитанных маршрутах, не городской транспортный поток. Коэффициент указан для первого проезда; точные границы — координаты дорожного манёвра.</p><table><thead><tr><th>Участок</th><th>Проездов</th><th>Первый въезд</th><th>Коэффициент</th></tr></thead><tbody>{segments.map((s, i) => <tr key={i}><td>{s.road}<small>{s.points[0].map(v => v.toFixed(4)).join(', ')} → {s.points.at(-1).map(v => v.toFixed(4)).join(', ')}</small></td><td>{s.count}</td><td>{formatTime(s.departure_at, timeZone)}</td><td>{s.coefficient == null ? 'Нет данных' : `×${s.coefficient}`}</td></tr>)}</tbody></table></details>}
     <MapContainer className="routes-map" center={model.points[0]} zoom={12} scrollWheelZoom>
       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />

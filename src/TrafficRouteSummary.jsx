@@ -18,7 +18,7 @@ function DepartureComparison({ traffic, timeZone, onDeparture }) {
   </div>
 }
 
-function TransitDepartureComparison({ route, traffic, planningDate, accessMinutes, timeZone, onDeparture }) {
+function TransitDepartureComparison({ route, traffic, planningDate, accessMinutes, timeZone, onDeparture, trafficRouteUrl }) {
   const [rows, setRows] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -33,7 +33,7 @@ function TransitDepartureComparison({ route, traffic, planningDate, accessMinute
       activeRequest.current.id += 1
       activeRequest.current.controller?.abort()
     }
-  }, [route, traffic, planningDate, accessMinutes, timeZone])
+  }, [route, traffic, planningDate, accessMinutes, timeZone, trafficRouteUrl])
 
   async function compare() {
     activeRequest.current.controller?.abort()
@@ -46,7 +46,7 @@ function TransitDepartureComparison({ route, traffic, planningDate, accessMinute
       const base = trafficRequest(route, planningDate, '', timeZone, accessMinutes)
       const options = await Promise.all([0, 30, 60].map(async (offset) => {
         const departureAt = new Date(Date.parse(traffic.departure_at) + offset * 60_000).toISOString()
-        const result = offset === 0 ? traffic : await api('/api/project/traffic/route', {
+        const result = offset === 0 ? traffic : await api(trafficRouteUrl, {
           method: 'POST',
           body: JSON.stringify({ ...base, departure_at: departureAt, include_departure_options: false }),
           signal: controller.signal,
@@ -75,7 +75,7 @@ function TransitDepartureComparison({ route, traffic, planningDate, accessMinute
   </div>
 }
 
-export default function TrafficRouteSummary({ routes, lines, loading, timeZone, planningDate, accessMinutes, onDeparture }) {
+export default function TrafficRouteSummary({ routes, lines, loading, timeZone, planningDate, accessMinutes, onDeparture, trafficRouteUrl }) {
   const active = routes.filter(route => route.locations.length >= 2)
   return <section className="traffic-forecast" aria-label="Прогноз поездок инженеров">
     <header><div><span className="eyebrow">Москва · Домодедово · Ступино · Кашира</span><h3>Сколько времени займёт маршрут</h3></div><span className="traffic-model-label">Модель · шаг 5 минут</span></header>
@@ -91,7 +91,7 @@ export default function TrafficRouteSummary({ routes, lines, loading, timeZone, 
           <div className="traffic-route-breakdown"><span>Путь {minutes(t.baseline_seconds)} мин</span><span>Работы {minutes(t.service_seconds)} мин</span><span>Ожидание до работ {minutes(t.waiting_seconds)} мин</span><span>Доступ к клиентам {minutes(t.access_seconds)} мин</span></div>
           {t.coverage_status === 'partial' && <p className="traffic-route-error">Часть пути вне зоны модели. Географическое покрытие: {Math.round(t.coverage_fraction * 100)}%.</p>}
           {t.late_stops > 0 && <p className="traffic-late-note">Позже опубликованного плана: {t.late_stops} {t.late_stops === 1 ? 'работа' : 'работы'}. Проверьте время выезда и расписание.</p>}
-          {route.transportType === 'PUBLIC_TRANSPORT' && <TransitDepartureComparison route={route} traffic={t} planningDate={planningDate} accessMinutes={accessMinutes} timeZone={timeZone} onDeparture={onDeparture} />}
+          {route.transportType === 'PUBLIC_TRANSPORT' && <TransitDepartureComparison route={route} traffic={t} planningDate={planningDate} accessMinutes={accessMinutes} timeZone={timeZone} onDeparture={onDeparture} trafficRouteUrl={trafficRouteUrl} />}
           <details className="traffic-route-details"><summary>Все переезды и варианты выезда <span>{t.legs.length} переездов</span></summary>
             <ol className="traffic-itinerary">{t.legs.map((leg, i) => <li key={`${leg.job_id}-${i}`}><span className="traffic-stop-number">{i + 1}</span><div><b>{route.jobs[i]?.address || `Заявка #${leg.job_id}`}</b><p>Выезд {formatTime(leg.departure_at, timeZone)} → прибытие {formatTime(leg.arrival_at, timeZone)} <strong>{minutes(leg.duration_seconds)} мин</strong></p>{leg.segments.filter(segment => segment.transit).map((segment, index) => <small key={index}>{transitTypeLabel(segment.travel_type)} {segment.transit.route}: {segment.transit.from_stop} → {segment.transit.to_stop}</small>)}<small>Работа {formatTime(leg.service_start_at, timeZone)}–{formatTime(leg.service_finish_at, timeZone)}{leg.waiting_seconds > 0 ? ` · ожидание ${minutes(leg.waiting_seconds)} мин` : ''}{leg.late_to_plan_seconds > 0 ? ` · позже плана на ${minutes(leg.late_to_plan_seconds)} мин` : ''}</small></div></li>)}</ol>
             <DepartureComparison traffic={t} timeZone={timeZone} onDeparture={onDeparture} />

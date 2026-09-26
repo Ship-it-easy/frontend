@@ -1,4 +1,12 @@
 import { transportProfile } from './transport.js'
+
+export function projectTrafficRouteUrl(projectId) {
+  if (!Number.isInteger(Number(projectId)) || Number(projectId) <= 0) {
+    throw new Error('Не выбран участок для построения маршрута')
+  }
+  return `/api/projects/${projectId}/workspace/traffic/route`
+}
+
 export function departureInstant(day, clock, timeZone = 'Europe/Moscow') {
   const wall = Date.parse(`${day}T${clock.slice(0, 5)}:00Z`)
   if (!Number.isFinite(wall)) throw new Error('Не указано время выезда')

@@ -31,6 +31,21 @@ export function routeGeometrySignature(routes) {
   }).sort().join('|')
 }
 
+export function routeForecastSignature(routes) {
+  return safeArray(routes).map((route) => JSON.stringify({
+    geometry: routeGeometrySignature([route]),
+    plannedDeparture: route.plannedDeparture,
+    shiftStart: route.shiftStart,
+    missingCoordinateCount: route.missingCoordinateCount,
+    jobs: safeArray(route.jobs).map((job) => ({
+      id: job.job_id,
+      duration: job.duration_min,
+      windowStart: job.time_window_start,
+      plannedStart: job.planned_start,
+    })),
+  })).sort().join('|')
+}
+
 export function decodePolyline6(encoded) {
   if (typeof encoded !== 'string' || !encoded.length) return []
   let index = 0
