@@ -1,5 +1,6 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
+import { baselineHighlights } from './baselineComparisonView.js'
 import PlanningConfig from './PlanningConfig.jsx'
 import { buildPlanComparison, matchesPlanningFilters, planChangeExplanation, planChangeTitle, planComparisonCause, planningDaySummary, readinessTarget, selectPlanningDate, unassignedChangeExplanation } from './planningView.js'
 import { Badge, Button, Empty, PageHeader, formatDate, formatDateTime, formatPriority, formatTime, priorityLabels } from './ui.jsx'
@@ -7,6 +8,7 @@ import { Badge, Button, Empty, PageHeader, formatDate, formatDateTime, formatPri
 const RoutesMap = React.lazy(() => import('./RoutesMap.jsx'))
 const safeArray = (value) => Array.isArray(value) ? value : []
 const activeStates = new Set(['PENDING', 'RUNNING'])
+const baselineComparisonEnabled = import.meta.env.VITE_BASELINE_COMPARISON_ENABLED !== 'false'
 const statusLabels = { NEW: 'Новая', IN_PROGRESS: 'В работе', COMPLETED: 'Выполнена', CANCELLED: 'Отменена' }
 const triggerLabels = { MANUAL: 'Вручную', NIGHTLY: 'Ночью', JOB_CREATED: 'Новая заявка', IMPORT: 'Импорт заявок', JOBS_IMPORTED: 'Импорт заявок', JOB_CANCELLED: 'Отмена заявки', ENGINEER_AVAILABILITY_LOST: 'Изменение доступности инженера', ENGINEER_AVAILABILITY_RESTORED: 'Изменение доступности инженера', COALESCED: 'Несколько изменений' }
 const resultLabels = { SUCCESS: 'Успешный результат', PARTIAL: 'Частичный результат', FEASIBLE_TIME_LIMIT: 'Допустимый план по лимиту времени' }
@@ -58,6 +60,56 @@ function ResultContext({ version, timeZone }) {
   const publicationStatus = version.status === 'FEASIBLE_TIME_LIMIT' ? 'SUCCESS' : version.status
   const optimizationLimited = version.optimization_limited || version.status === 'FEASIBLE_TIME_LIMIT'
   return <section className="plan-context"><div><span>Последняя публикация</span><b>{formatDateTime(version.published_at, timeZone)}</b></div><div><span>Причина запуска</span><b>{triggerLabels[version.trigger] || version.trigger}</b></div>{version.initiator && <div><span>Инициатор</span><b>{version.initiator}</b></div>}<div><span>Версия плана</span><b>Версия {version.number}</b></div><div><span>Статус</span><b>{resultLabels[publicationStatus] || publicationStatus}</b></div>{optimizationLimited && <div><span>Оптимизация</span><b>Допустимый план, оптимальность не доказана</b></div>}</section>
+}
+
+function signedMetric(value, formatter = (item) => String(item)) {
+  if (value == null) return '—'
+  const number = Number(value)
+  if (Number.isNaN(number)) return '—'
+  if (number === 0) return formatter(0)
+  return `${number > 0 ? '+' : '−'}${formatter(Math.abs(number))}`
+}
+
+function hitRate(value) {
+  if (value == null) return '—'
+  return `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(Number(value))}%`
+}
+
+function BaselineLoading({ text }) {
+  return <section className="baseline-comparison loading" aria-live="polite"><div className="baseline-loading-copy"><span className="spinner" /><span>{text}</span></div><div className="baseline-skeleton" aria-hidden="true"><i /><i /><i /><i /></div></section>
+}
+
+function BaselineComparison({ value, loading, error, onRetry, onExpand, previousPlan }) {
+  if (loading) return <BaselineLoading text="Считаем сравнение с FIFO…" />
+  if (error) return <section className="baseline-comparison state error"><div><span>Сравнение с базовым планом</span><b>Не удалось загрузить сравнение</b><small>{error}</small></div><Button kind="secondary" onClick={onRetry}>Повторить</Button></section>
+  if (!value) return null
+  if (value.status === 'NO_DAILY_RESULT') return <section className="baseline-comparison state"><div><span>Сравнение с базовым планом</span><b>Для выбранной даты нет рассчитанного плана</b><small>Выберите день с опубликованным результатом или запустите планирование.</small></div></section>
+  if (activeStates.has(value.status)) return <BaselineLoading text="Сравнение рассчитывается…" />
+  if (value.status === 'NOT_AVAILABLE_LEGACY_PLAN') return <section className="baseline-comparison state"><div><span>Сравнение с базовым планом</span><b>Для этой версии сравнение не рассчитывалось</b><small>Оно появится после следующего расчёта маршрутов.</small></div></section>
+  if (value.status === 'NOT_APPLICABLE_SHIFT_STARTED') return <section className="baseline-comparison state"><div><span>Сравнение с базовым планом</span><b>Сравнение не рассчитывается после начала рабочей смены</b><small>Снимок данных создан не раньше начала первой смены.</small></div></section>
+  if (value.status === 'FAILED') return <section className="baseline-comparison state error"><div><span>Сравнение с базовым планом</span><b>Сравнение временно недоступно</b><small>{value.failure_message || 'Дорожные данные для базового маршрута пока недоступны.'}{value.attempt_count ? ` · попытка ${value.attempt_count} из 3` : ''}</small></div>{Number(value.attempt_count || 0) < 3 ? <Button kind="secondary" onClick={() => onRetry(value.planning_run_id)}>Повторить</Button> : <small>Лимит повторов исчерпан</small>}</section>
+  if (value.status !== 'READY' || !value.baseline || !value.optimized) return null
+
+  const comparable = value.coverage_comparable === true
+  const baseline = value.baseline
+  const optimized = value.optimized
+  const delta = value.delta || {}
+  const wins = baselineHighlights(value, (meters) => formatKilometers(meters, 1))
+  const rows = [
+    { key: 'assigned', title: 'Назначено заявок', baseline: `${baseline.assigned_jobs_count} из ${baseline.input_jobs_count}`, optimized: `${optimized.assigned_jobs_count} из ${optimized.input_jobs_count}`, delta: signedMetric(delta.assigned_jobs_count) },
+    { key: 'windows', title: 'Попали во временное окно', baseline: `${baseline.window_hit_count} из ${baseline.assigned_jobs_count} · ${hitRate(baseline.window_hit_rate)}`, optimized: `${optimized.window_hit_count} из ${optimized.assigned_jobs_count} · ${hitRate(optimized.window_hit_rate)}`, delta: `${signedMetric(delta.window_hit_count)} заявок · ${signedMetric(delta.window_hit_rate, (item) => `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(item)} п.п.`)}` },
+    { key: 'engineers', title: 'Задействовано инженеров', baseline: baseline.active_engineer_count, optimized: optimized.active_engineer_count, delta: signedMetric(delta.active_engineer_count) },
+    { key: 'distance', title: 'Общий пробег', baseline: formatKilometers(baseline.total_distance_meters, 1), optimized: formatKilometers(optimized.total_distance_meters, 1), delta: signedMetric(delta.total_distance_meters, (meters) => formatKilometers(meters, 1)) },
+  ]
+  return <section className="baseline-comparison" aria-labelledby="baseline-comparison-title">
+    <header><div><span>Контрольный сценарий</span><h2 id="baseline-comparison-title">Сравнение с базовым планом</h2><p>Заявки по порядку поступления назначаются первому подходящему инженеру. На каждую заявку учитывается норматив и 20 минут дороги.</p></div><div className="baseline-result-note"><details className="baseline-method"><summary>Как считается базовый план</summary><p>{value.methodology}</p><small>Оба варианта используют один снимок данных. Сравнение сохранено вместе с версией плана и не пересчитывается по изменившимся данным.</small></details>{previousPlan && <small>Показано сравнение предыдущей опубликованной версии</small>}{comparable && wins.length > 0 && <strong>Оптимизатор: {wins.join(' · ')}</strong>}{value.calculated_at && <small>Рассчитано {formatDateTime(value.calculated_at, value.timezone)}</small>}</div></header>
+    {!comparable && <div className="baseline-comparison-warning"><b>Покрытие различается</b><span>Планы назначили разные наборы заявок. Количество инженеров и пробег показаны справочно и не являются прямой оценкой экономии.</span></div>}
+    <div className="baseline-comparison-table" role="table" aria-label="Метрики FIFO и оптимального плана">
+      <div className="head" role="row"><span>Метрика</span><span>Базовый план (FIFO)</span><span>Оптимальный план</span><span>Разница</span></div>
+      {rows.map((row) => <div key={row.key} role="row" className={!comparable && row.key === 'assigned' ? 'coverage-difference' : ''}><b>{row.title}</b><span>{row.baseline}</span><strong>{row.optimized}</strong><em className={comparable ? 'comparable' : ''}>{row.delta}</em></div>)}
+    </div>
+    <details className="baseline-engineers" onToggle={(event) => event.currentTarget.open && onExpand(value)}><summary>Пробег по инженерам · Развернуть</summary><div><div className="baseline-engineers-head"><span>Инженер</span><span>Базовый план</span><span>Оптимальный план</span><span>Разница</span></div>{safeArray(value.engineers).map((engineer, index) => <article key={`${engineer.engineer_name}-${index}`}><b>{engineer.engineer_name || `Инженер ${index + 1}`}</b><span>{pluralJobs(engineer.baseline_jobs_count)} · {formatKilometers(engineer.baseline_distance_meters)}</span><span>{pluralJobs(engineer.optimized_jobs_count)} · {formatKilometers(engineer.optimized_distance_meters)}</span><strong>{signedMetric(engineer.delta_distance_meters, formatKilometers)}</strong></article>)}</div></details>
+  </section>
 }
 
 function JobCard({ job, onOpen, cancelled = false, timeZone }) {
@@ -147,8 +199,8 @@ function assignmentSnapshot(value, timeZone) {
   return `${formatDate(value.planning_date)} · ${engineer}${time}${sequence}`
 }
 
-function formatKilometers(meters) {
-  return `${new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 1 }).format(Number(meters || 0) / 1000)} км`
+function formatKilometers(meters, minimumFractionDigits = 0) {
+  return `${new Intl.NumberFormat('ru-RU', { minimumFractionDigits, maximumFractionDigits: 1 }).format(Number(meters || 0) / 1000)} км`
 }
 
 function metricTransition(before, after, formatter, hasPrevious = true) {
@@ -213,9 +265,69 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
   const [comparisonError, setComparisonError] = useState('')
   const [comparisonVersions, setComparisonVersions] = useState([])
   const [selectedComparisonVersionId, setSelectedComparisonVersionId] = useState(null)
+  const [baselineComparison, setBaselineComparison] = useState(null)
+  const [baselineLoading, setBaselineLoading] = useState(false)
+  const [baselineError, setBaselineError] = useState('')
+  const [baselineReload, setBaselineReload] = useState(0)
   const comparisonRequest = useRef('')
   const comparisonVersionsRequest = useRef('')
   const selectedComparisonVersion = useRef(null)
+  const boardRequest = useRef(0)
+  const dayRequest = useRef(0)
+  const dayInFlight = useRef('')
+  const selectedDateRef = useRef('')
+  const boardRef = useRef(null)
+
+  useEffect(() => {
+    let cancelled = false
+    if (!baselineComparisonEnabled || !selectedDate || !board?.plan_version?.id) {
+      setBaselineComparison(null)
+      setBaselineError('')
+      setBaselineLoading(false)
+      return () => { cancelled = true }
+    }
+    setBaselineLoading(true)
+    setBaselineError('')
+    api(`${base}/current/days/${selectedDate}/comparison?plan_version_id=${board.plan_version.id}`)
+      .then((value) => { if (!cancelled) setBaselineComparison(value) })
+      .catch((error) => { if (!cancelled) { setBaselineComparison(null); if (error.code === 'BASELINE_VERSION_CHANGED') { void loadBoard(true, selectedDate).then((value) => { if (!value && !cancelled) setBaselineError('Не удалось обновить версию плана') }) } else { setBaselineError(error.message) } } })
+      .finally(() => { if (!cancelled) setBaselineLoading(false) })
+    return () => { cancelled = true }
+  }, [base, selectedDate, board?.plan_version?.id, baselineReload])
+
+  useEffect(() => {
+    if (!activeStates.has(baselineComparison?.status)) return undefined
+    const timer = window.setTimeout(
+      () => setBaselineReload((value) => value + 1),
+      2000,
+    )
+    return () => window.clearTimeout(timer)
+  }, [baselineComparison?.status, baselineReload])
+
+  async function retryBaseline(planningRunId) {
+    if (!planningRunId) {
+      setBaselineReload((value) => value + 1)
+      return
+    }
+    setBaselineLoading(true)
+    setBaselineError('')
+    try {
+      const result = await api(`${base}/runs/${planningRunId}/baseline/retry`, { method: 'POST' })
+      emitPlanningEvent('planning_baseline_retry_completed', { project_id: projectId, planning_run_id: planningRunId, status: result.status })
+      notify(result.status === 'READY' ? 'Сравнение с FIFO рассчитано' : 'Повтор запущен')
+      setBaselineReload((value) => value + 1)
+    } catch (error) {
+      setBaselineError(error.message)
+      notify(error.message, 'error')
+    } finally {
+      setBaselineLoading(false)
+    }
+  }
+
+  function recordBaselineExpansion(value) {
+    emitPlanningEvent('planning_comparison_engineers_expanded', { planning_run_id: value.planning_run_id, plan_version_id: value.plan_version_id })
+    void api(`${base}/current/days/${value.date}/comparison/engineers-expanded?planning_run_id=${value.planning_run_id}&plan_version_id=${value.plan_version_id}`, { method: 'POST' }).catch(() => {})
+  }
 
   async function loadComparisonVersions(currentVersionId) {
     if (!currentVersionId) { setComparisonVersions([]); return }
@@ -259,11 +371,16 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
   }
 
   async function loadDay(date, versionId, quiet = false) {
+    const requestId = ++dayRequest.current
+    const requestKey = `${date}:${versionId || ''}`
+    dayInFlight.current = requestKey
     try {
       const value = await api(`${base}/board/${date}${versionId ? `?plan_version_id=${versionId}` : ''}`)
+      if (requestId !== dayRequest.current || selectedDateRef.current !== date || Number(boardRef.current?.plan_version?.id || 0) !== Number(versionId || 0)) return null
       setDay(value)
       return value
     } catch (error) {
+      if (requestId !== dayRequest.current || selectedDateRef.current !== date) return null
       if (error.code === 'VERSION_CHANGED') {
         const value = await loadBoard(true, date)
         if (value) emitPlanningEvent('planning_version_changed', { plan_version_id: value.plan_version?.id })
@@ -271,14 +388,26 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
       }
       if (!quiet) notify(error.message, 'error')
       return null
+    } finally {
+      if (requestId === dayRequest.current && dayInFlight.current === requestKey) dayInFlight.current = ''
     }
   }
 
   async function loadBoard(quiet = false, preferredDate = selectedDate) {
+    const requestId = ++boardRequest.current
     try {
       const value = await api(`${base}/board?days=7`)
-      const nextDate = selectPlanningDate(value.days, preferredDate, value.project_date)
-      const previousVersion = board?.plan_version?.id
+      if (requestId !== boardRequest.current) return null
+      const nextDate = selectPlanningDate(value.days, selectedDateRef.current || preferredDate, value.project_date)
+      const previousVersion = boardRef.current?.plan_version?.id
+      const sameView = selectedDateRef.current === nextDate && Number(previousVersion || 0) === Number(value.plan_version?.id || 0)
+      const reusePendingDay = sameView && nextDate !== value.project_date && dayInFlight.current === `${nextDate}:${value.plan_version?.id || ''}`
+      boardRef.current = value
+      selectedDateRef.current = nextDate
+      if (!reusePendingDay) {
+        ++dayRequest.current
+        dayInFlight.current = ''
+      }
       setBoard(value)
       if (value.plan_version?.id) {
         const followsCurrent = !selectedComparisonVersion.current || !previousVersion || Number(selectedComparisonVersion.current) === Number(previousVersion)
@@ -299,7 +428,10 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
       }
       if (!quiet) emitPlanningEvent('planning_board_opened', { project_id: projectId, plan_version_id: value.plan_version?.id })
       setSelectedDate(nextDate)
+      if (reusePendingDay) return value
+      if (nextDate !== value.project_date && !sameView) setDay(null)
       const nextDay = nextDate === value.project_date ? value.selected_day : await loadDay(nextDate, value.plan_version?.id, true)
+      if (requestId !== boardRequest.current || selectedDateRef.current !== nextDate) return null
       if (nextDate === value.project_date) setDay(nextDay)
       if (drawer && previousVersion && value.plan_version?.id !== previousVersion) {
         setDrawerUpdated(true)
@@ -307,16 +439,21 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
       }
       return value
     } catch (error) {
-      if (!quiet) notify(error.message, 'error')
+      if (!quiet && requestId === boardRequest.current) notify(error.message, 'error')
       return null
-    } finally { if (!quiet) setLoading(false) }
+    } finally { if (!quiet && requestId === boardRequest.current) setLoading(false) }
   }
 
   useEffect(() => {
+    ++boardRequest.current
+    ++dayRequest.current
+    dayInFlight.current = ''
+    selectedDateRef.current = ''
+    boardRef.current = null
     comparisonRequest.current = ''
     comparisonVersionsRequest.current = ''
     selectedComparisonVersion.current = null
-    setBoard(null); setDay(null); setSelectedDate(''); setLoading(true); setDrawer(null); setComparisonPlan(null); setComparisonVersions([]); setSelectedComparisonVersionId(null); setComparisonLoading(false); setComparisonError('')
+    setBoard(null); setDay(null); setSelectedDate(''); setLoading(true); setDrawer(null); setComparisonPlan(null); setComparisonVersions([]); setSelectedComparisonVersionId(null); setComparisonLoading(false); setComparisonError(''); setBaselineComparison(null); setBaselineError(''); setBaselineLoading(false)
     void loadBoard(false, '')
   }, [projectId, ownerMode])
 
@@ -327,9 +464,13 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
   }, [base, selectedDate, board?.active_run?.state, board?.plan_version?.id])
 
   async function selectDate(value) {
+    selectedDateRef.current = value
+    ++dayRequest.current
+    dayInFlight.current = ''
     setSelectedDate(value)
-    if (value === board?.project_date) setDay(board.selected_day)
-    else { setDay(null); await loadDay(value, board?.plan_version?.id) }
+    const currentBoard = boardRef.current
+    if (value === currentBoard?.project_date) setDay(currentBoard.selected_day)
+    else { setDay(null); await loadDay(value, currentBoard?.plan_version?.id) }
     emitPlanningEvent('planning_day_selected', { project_id: projectId, planning_date: value, plan_version_id: board?.plan_version?.id })
   }
 
@@ -374,6 +515,7 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
       <DateStrip days={board?.days} selected={selectedDate} selectedDay={day} today={board?.project_date} onSelect={selectDate} />
       <ResultContext version={board?.plan_version} timeZone={board?.timezone} />
       {!board?.plan_version ? <Empty title="План ещё не рассчитан" text={board?.readiness?.ready === false ? 'Подготовьте обязательные данные, затем запустите расчёт.' : 'Нажмите «Рассчитать маршруты», чтобы опубликовать первый план.'} action={board?.readiness?.ready !== false && <Button onClick={calculate}>Рассчитать маршруты</Button>} /> : <>
+        {baselineComparisonEnabled && <BaselineComparison value={baselineComparison} loading={baselineLoading || (!!baselineComparison && (baselineComparison.date !== selectedDate || Number(baselineComparison.plan_version_id) !== Number(board?.plan_version?.id)))} error={baselineError} onRetry={retryBaseline} onExpand={recordBaselineExpansion} previousPlan={activeStates.has(board?.active_run?.state)} />}
         <section className="board-filters"><label className="board-search"><span>⌕</span><input aria-label="Поиск по адресу и типу работ" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Адрес или тип работ" /></label><select aria-label="Приоритет" value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}><option value="">Все приоритеты</option>{Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select aria-label="Статус заявки" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">Все статусы</option>{safeArray(day?.available_filters?.statuses).map((status) => <option key={status} value={status}>{statusLabels[status] || status}</option>)}</select><select aria-label="Результат" value={filters.outcome} onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}><option value="ALL">Все</option><option value="ASSIGNED">Назначенные</option><option value="UNASSIGNED_TODAY">Перенесённые и неназначенные</option></select>{filtered && <span className="shown-count">Показано {visibleCount} из {allCards.length}</span>}</section>
         {!day ? <div className="board-loading"><span className="spinner" /> Загружаем день…</div> : !day.result_available ? <Empty title="Для этой даты нет результата расчёта" text="Дата не рассчитывалась в актуальной версии плана." /> : <><Suspense fallback={<div className="map-loading"><span className="spinner" /> Загружаем карту…</div>}><RoutesMap day={day} planningDate={selectedDate} timeZone={board?.timezone} projectId={projectId} /></Suspense><div className="route-board"><div className="route-board-scroll">{safeArray(day.engineer_columns).map((column) => <EngineerColumn key={column.engineer_id} column={column} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} />)}<UnassignedColumn value={day.unassigned} filterJob={filterJob} onOpen={openExplanation} timeZone={board?.timezone} /></div></div></>}
         <PlanComparison plan={comparisonPlan} loading={comparisonLoading} error={comparisonError} timeZone={board?.timezone} versions={comparisonVersions} selectedVersionId={selectedComparisonVersionId} onVersionChange={selectComparisonVersion} />
@@ -382,3 +524,5 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
     {drawer && <ExplanationDrawer value={drawer} loading={drawerLoading} updated={drawerUpdated} onClose={() => { setDrawer(null); setDrawerUpdated(false) }} returnFocus={returnFocus} timeZone={board?.timezone} />}
   </>
 }
+
+export { BaselineComparison }
