@@ -81,7 +81,7 @@ function JobsPage({ workTypes, notify, importBatchId, onClearImportFilter, apiBa
 }
 
 function EngineerForm({ item, qualifications, onClose, onSaved, notify, apiBase = '/api/project' }) {
-  const [form, setForm] = useState({ name: item?.name || '', active: item?.active ?? true, transport_type: item?.transport_type || 'NONE', start_address: item?.start_address || '', start_latitude: item?.start_latitude ?? null, start_longitude: item?.start_longitude ?? null, qualification_ids: item?.qualification_ids || [] })
+  const [form, setForm] = useState({ name: item?.name || '', active: item?.active ?? true, transport_type: item?.transport_type === 'PUBLIC_TRANSPORT' ? 'NONE' : item?.transport_type || 'NONE', start_address: item?.start_address || '', start_latitude: item?.start_latitude ?? null, start_longitude: item?.start_longitude ?? null, qualification_ids: item?.qualification_ids || [] })
   const [busy, setBusy] = useState(false)
   async function submit(event) {
     event.preventDefault()
@@ -99,7 +99,7 @@ function EngineerForm({ item, qualifications, onClose, onSaved, notify, apiBase 
       onSaved(); onClose()
     } catch (error) { notify(error.message, 'error') } finally { setBusy(false) }
   }
-  return <Modal wide title={item ? item.name : 'Новый инженер'} subtitle="Профиль, транспорт и квалификации" onClose={onClose}><form className="stack-form" onSubmit={submit}><Field label="Имя"><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><label className="switch-row"><span><b>Участвует в расчётах</b><small>Неактивному инженеру новые заявки не назначаются</small></span><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /></label><Field label="Способ передвижения"><select value={form.transport_type} onChange={(event) => setForm({ ...form, transport_type: event.target.value })}>{transportOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>{form.transport_type === 'PUBLIC_TRANSPORT' && <small>Маршруты с поездками требуют расписаний общественного транспорта. Без них возможен только пеший путь.</small>}<AddressField suggestionsUrl={`${apiBase}/address-suggestions`} label="Стартовый адрес" value={form.start_address} onChange={(start_address) => setForm({ ...form, start_address, start_latitude: null, start_longitude: null })} onSelect={(choice) => setForm({ ...form, start_address: choice.display_name, start_latitude: choice.latitude, start_longitude: choice.longitude })} /><div><div className="section-label">Квалификации</div><CheckGroup items={qualifications.filter((item) => item.active)} value={form.qualification_ids} onChange={(qualification_ids) => setForm({ ...form, qualification_ids })} /></div>{item && <div className="planning-impact-warning">{form.active !== item.active ? 'Изменение доступности может автоматически перестроить опубликованный план.' : planningImpactText}</div>}<div className="form-actions"><Button type="button" kind="ghost" onClick={onClose}>Отмена</Button><Button disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div></form></Modal>
+  return <Modal wide title={item ? item.name : 'Новый инженер'} subtitle="Профиль, транспорт и квалификации" onClose={onClose}><form className="stack-form" onSubmit={submit}><Field label="Имя"><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><label className="switch-row"><span><b>Участвует в расчётах</b><small>Неактивному инженеру новые заявки не назначаются</small></span><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /></label><Field label="Способ передвижения"><select value={form.transport_type} onChange={(event) => setForm({ ...form, transport_type: event.target.value })}>{transportOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field><AddressField suggestionsUrl={`${apiBase}/address-suggestions`} label="Стартовый адрес" value={form.start_address} onChange={(start_address) => setForm({ ...form, start_address, start_latitude: null, start_longitude: null })} onSelect={(choice) => setForm({ ...form, start_address: choice.display_name, start_latitude: choice.latitude, start_longitude: choice.longitude })} /><div><div className="section-label">Квалификации</div><CheckGroup items={qualifications.filter((item) => item.active)} value={form.qualification_ids} onChange={(qualification_ids) => setForm({ ...form, qualification_ids })} /></div>{item && <div className="planning-impact-warning">{form.active !== item.active ? 'Изменение доступности может автоматически перестроить опубликованный план.' : planningImpactText}</div>}<div className="form-actions"><Button type="button" kind="ghost" onClick={onClose}>Отмена</Button><Button disabled={busy}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div></form></Modal>
 }
 
 const weekdayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
@@ -266,7 +266,18 @@ function CatalogsPage({ catalogs, reload, notify, apiBase = '/api/project' }) {
       : tab === 'equipment-types'
         ? { name: form.name, active: form.active, available_units: Number(form.available_units) }
         : { name: form.name, active: form.active }
-    try { await api(`${apiBase}/${tab}${editing ? `/${editing.id}` : ''}`, { method: editing ? 'PATCH' : 'POST', body: JSON.stringify(body) }); notify(editing ? 'Изменения сохранены' : `Добавлена новая сущность`); setEditing(null); setForm(empty()); reload() }
+    try {
+      const saved = await api(`${apiBase}/${tab}${editing ? `/${editing.id}` : ''}`, { method: editing ? 'PATCH' : 'POST', body: JSON.stringify(body) })
+      if (tab === 'work-types' && saved?.required_transport !== body.required_transport) {
+        throw new Error('Требование к транспорту не сохранилось. Повторите попытку.')
+      }
+      notify(saved?.planning_event_state === 'PENDING'
+        ? 'Приоритет сохранён, пересчёт плана поставлен в очередь'
+        : editing ? 'Изменения сохранены' : 'Добавлена новая сущность')
+      setEditing(null)
+      setForm(empty())
+      reload()
+    }
     catch (error) { notify(error.message, 'error') }
   }
   function edit(item) { setEditing(item); setForm({ ...item }) }

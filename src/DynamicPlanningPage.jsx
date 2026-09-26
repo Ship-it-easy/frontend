@@ -10,7 +10,7 @@ const safeArray = (value) => Array.isArray(value) ? value : []
 const activeStates = new Set(['PENDING', 'RUNNING'])
 const baselineComparisonEnabled = import.meta.env.VITE_BASELINE_COMPARISON_ENABLED !== 'false'
 const statusLabels = { NEW: 'Новая', IN_PROGRESS: 'В работе', COMPLETED: 'Выполнена', CANCELLED: 'Отменена' }
-const triggerLabels = { MANUAL: 'Вручную', NIGHTLY: 'Ночью', JOB_CREATED: 'Новая заявка', IMPORT: 'Импорт заявок', JOBS_IMPORTED: 'Импорт заявок', JOB_CANCELLED: 'Отмена заявки', ENGINEER_AVAILABILITY_LOST: 'Изменение доступности инженера', ENGINEER_AVAILABILITY_RESTORED: 'Изменение доступности инженера', COALESCED: 'Несколько изменений' }
+const triggerLabels = { MANUAL: 'Вручную', NIGHTLY: 'Ночью', JOB_CREATED: 'Новая заявка', IMPORT: 'Импорт заявок', JOBS_IMPORTED: 'Импорт заявок', JOB_CANCELLED: 'Отмена заявки', WORK_TYPE_PRIORITY_CHANGED: 'Изменение приоритета типа работ', ENGINEER_AVAILABILITY_LOST: 'Изменение доступности инженера', ENGINEER_AVAILABILITY_RESTORED: 'Изменение доступности инженера', COALESCED: 'Несколько изменений' }
 const resultLabels = { SUCCESS: 'Успешный результат', PARTIAL: 'Частичный результат', FEASIBLE_TIME_LIMIT: 'Допустимый план по лимиту времени' }
 
 function emitPlanningEvent(name, detail = {}) {
@@ -87,7 +87,10 @@ function BaselineComparison({ value, loading, error, onRetry, onExpand, previous
   if (activeStates.has(value.status)) return <BaselineLoading text="Сравнение рассчитывается…" />
   if (value.status === 'NOT_AVAILABLE_LEGACY_PLAN') return <section className="baseline-comparison state"><div><span>Сравнение с базовым планом</span><b>Для этой версии сравнение не рассчитывалось</b><small>Оно появится после следующего расчёта маршрутов.</small></div></section>
   if (value.status === 'NOT_APPLICABLE_SHIFT_STARTED') return <section className="baseline-comparison state"><div><span>Сравнение с базовым планом</span><b>Сравнение не рассчитывается после начала рабочей смены</b><small>Снимок данных создан не раньше начала первой смены.</small></div></section>
-  if (value.status === 'FAILED') return <section className="baseline-comparison state error"><div><span>Сравнение с базовым планом</span><b>Сравнение временно недоступно</b><small>{value.failure_message || 'Дорожные данные для базового маршрута пока недоступны.'}{value.attempt_count ? ` · попытка ${value.attempt_count} из 3` : ''}</small></div>{Number(value.attempt_count || 0) < 3 ? <Button kind="secondary" onClick={() => onRetry(value.planning_run_id)}>Повторить</Button> : <small>Лимит повторов исчерпан</small>}</section>
+  if (value.status === 'FAILED') {
+    const noRoad = value.failure_code === 'BASELINE_ROUTE_UNAVAILABLE'
+    return <section className="baseline-comparison state error"><div><span>Сравнение с базовым планом</span><b>{noRoad ? 'Для базового маршрута не найдена дорога' : 'Сравнение временно недоступно'}</b><small>{value.failure_message || (noRoad ? 'Нужный участок отсутствует в сохранённом дорожном снимке.' : 'Дорожные данные для базового маршрута пока недоступны.')}{noRoad ? ' Проверьте адрес заявки и покрытие дорожной карты.' : value.attempt_count ? ` · попытка ${value.attempt_count} из 3` : ''}</small></div>{!noRoad && (Number(value.attempt_count || 0) < 3 ? <Button kind="secondary" onClick={() => onRetry(value.planning_run_id)}>Повторить</Button> : <small>Лимит повторов исчерпан</small>)}</section>
+  }
   if (value.status !== 'READY' || !value.baseline || !value.optimized) return null
 
   const comparable = value.coverage_comparable === true
@@ -459,7 +462,7 @@ export default function DynamicPlanningPage({ projectId, notify, ownerMode = fal
 
   useEffect(() => {
     const active = activeStates.has(board?.active_run?.state)
-    const timer = window.setInterval(() => void loadBoard(true), active ? 2000 : 15000)
+    const timer = window.setInterval(() => void loadBoard(true), active ? 10000 : 15000)
     return () => window.clearInterval(timer)
   }, [base, selectedDate, board?.active_run?.state, board?.plan_version?.id])
 

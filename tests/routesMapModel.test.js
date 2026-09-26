@@ -69,7 +69,7 @@ test('route geometry signature ignores response identity but tracks route order'
 test('forecast refreshes when plan timings change without moving stops', () => {
   const original = {
     engineerId: 7,
-    transportType: 'PUBLIC_TRANSPORT',
+    transportType: 'BICYCLE',
     locations: [{ latitude: 55.7, longitude: 37.5 }, { latitude: 55.8, longitude: 37.6 }],
     plannedDeparture: '2026-09-26T06:00:00Z',
     jobs: [{ job_id: 1, duration_min: 30, planned_start: '2026-09-26T07:00:00Z' }],

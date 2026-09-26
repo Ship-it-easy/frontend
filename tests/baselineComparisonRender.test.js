@@ -94,6 +94,11 @@ test('all non-ready states keep their own safe message and no metric table', () 
   assert.ok(render(null, { loading: true }).includes('baseline-skeleton'))
   assert.ok(render({ status: 'FAILED', attempt_count: 3 }).includes('Лимит повторов исчерпан'))
   assert.ok(!render({ status: 'FAILED', attempt_count: 3 }).includes('<button'))
+  const noRoad = render({ status: 'FAILED', failure_code: 'BASELINE_ROUTE_UNAVAILABLE', failure_message: 'Дуга недоступна', attempt_count: 1 })
+  assert.ok(noRoad.includes('не найдена дорога'))
+  assert.ok(noRoad.includes('Проверьте адрес заявки'))
+  assert.ok(!noRoad.includes('Сравнение временно недоступно'))
+  assert.ok(!noRoad.includes('<button'))
 })
 
 test('equal coverage renders the exact demo metrics and measured distance advantage', () => {

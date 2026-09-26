@@ -12,3 +12,13 @@ for (const option of transportOptions) {
     assert.equal(request.profile, option.profile)
   })
 }
+
+test('historical public transport route is displayed as walking', () => {
+  const request = trafficRequest({
+    transportType: 'PUBLIC_TRANSPORT',
+    start: { latitude: 55.8, longitude: 37.4 },
+    shiftStart: '09:00', jobs: [],
+  }, '2026-09-25', '', 'Europe/Moscow')
+  assert.equal(request.profile, 'pedestrian')
+  assert.equal(transportOptions.some(option => option.value === 'PUBLIC_TRANSPORT'), false)
+})
