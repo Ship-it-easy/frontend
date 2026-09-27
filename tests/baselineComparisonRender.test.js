@@ -82,7 +82,7 @@ test('all non-ready states keep their own safe message and no metric table', () 
     ['PENDING', 'Сравнение рассчитывается'],
     ['RUNNING', 'Сравнение рассчитывается'],
     ['FAILED', 'Сравнение временно недоступно'],
-    ['NOT_APPLICABLE_SHIFT_STARTED', 'после начала рабочей смены'],
+    ['NOT_APPLICABLE_SHIFT_STARTED', 'рабочая смена уже началась'],
     ['NOT_AVAILABLE_LEGACY_PLAN', 'сравнение не рассчитывалось'],
     ['NO_DAILY_RESULT', 'нет рассчитанного плана'],
   ]
